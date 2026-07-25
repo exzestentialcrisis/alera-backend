@@ -1,4 +1,6 @@
-from fastapi.testclient import TestClient
+import asyncio
+
+from httpx import ASGITransport, AsyncClient
 
 from app.core.config import Settings
 from app.db.database import create_db_engine
@@ -14,7 +16,14 @@ def test_health_check_does_not_require_database(monkeypatch):
             database_url=None,
         )
     )
-    response = TestClient(app).get("/health")
+    async def request_health():
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            return await client.get("/health")
+
+    response = asyncio.run(request_health())
     assert response.status_code == 200
     assert response.json() == {
         "status": "healthy",

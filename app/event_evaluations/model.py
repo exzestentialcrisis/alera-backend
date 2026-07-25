@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Numeric, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Numeric, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -43,6 +43,7 @@ class EvaluationSeverity(str, enum.Enum):
 
 class EventEvaluation(Base):
     __tablename__ = "event_evaluations"
+    __table_args__ = (Index("ix_event_evaluations_alert_id", "alert_id"),)
 
     evaluation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -58,6 +59,7 @@ class EventEvaluation(Base):
 
     alert_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
+        ForeignKey("alerts.alert_id"),
         nullable=True,
     )
 

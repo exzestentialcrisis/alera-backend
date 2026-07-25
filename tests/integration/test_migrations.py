@@ -48,7 +48,57 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "health_events",
             "event_evaluations",
             "condition_trackers",
+            "alerts",
+            "alert_actions",
         }.issubset(inspector.get_table_names())
+
+        def foreign_key_exists(table, columns, referred_table, referred_columns):
+            return any(
+                item["constrained_columns"] == columns
+                and item["referred_table"] == referred_table
+                and item["referred_columns"] == referred_columns
+                for item in inspector.get_foreign_keys(table)
+            )
+
+        assert foreign_key_exists(
+            "alerts", ["patient_id"], "elderly_patients", ["patient_id"]
+        )
+        assert foreign_key_exists(
+            "alert_actions", ["alert_id"], "alerts", ["alert_id"]
+        )
+        assert foreign_key_exists(
+            "alert_actions",
+            ["performed_by_user_id"],
+            "users",
+            ["user_id"],
+        )
+        assert foreign_key_exists(
+            "event_evaluations", ["alert_id"], "alerts", ["alert_id"]
+        )
+
+        expected_indexes = {
+            "alerts": {
+                "ix_alerts_patient_status",
+                "ix_alerts_patient_condition_detected",
+                "ix_alerts_detected_at",
+                "uq_alerts_unresolved_patient_condition",
+            },
+            "alert_actions": {"ix_alert_actions_alert_performed_at"},
+            "event_evaluations": {"ix_event_evaluations_alert_id"},
+        }
+        for table_name, names in expected_indexes.items():
+            assert names.issubset(
+                {item["name"] for item in inspector.get_indexes(table_name)}
+            )
+
+        alert_checks = {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("alerts")
+        }
+        assert {
+            "ck_alerts_confirmed_at_after_detected_at",
+            "ck_alerts_resolved_at_after_confirmed_at",
+        }.issubset(alert_checks)
 
         assert {item["column_names"][0] for item in inspector.get_unique_constraints(
             "health_events"
@@ -93,7 +143,49 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                     )
                 ).scalars()
             )
+            alert_status_values = connection.execute(
+                text(
+                    "SELECT enumlabel FROM pg_enum "
+                    "JOIN pg_type ON pg_type.oid = pg_enum.enumtypid "
+                    "WHERE pg_type.typname = 'alert_status' "
+                    "ORDER BY pg_enum.enumsortorder"
+                )
+            ).scalars().all()
+            alert_action_values = connection.execute(
+                text(
+                    "SELECT enumlabel FROM pg_enum "
+                    "JOIN pg_type ON pg_type.oid = pg_enum.enumtypid "
+                    "WHERE pg_type.typname = 'alert_action_type' "
+                    "ORDER BY pg_enum.enumsortorder"
+                )
+            ).scalars().all()
+            partial_index = connection.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE tablename = 'alerts' "
+                    "AND indexname = "
+                    "'uq_alerts_unresolved_patient_condition'"
+                )
+            ).scalar_one()
         assert {"HEART_RATE", "SPO2", "ACTIVITY", "SLEEP"}.issubset(metric_values)
+        assert alert_status_values == [
+            "ACTIVE",
+            "ACKNOWLEDGED",
+            "RESOLVED",
+            "FALSE_ALARM",
+            "ARCHIVED",
+        ]
+        assert alert_action_values == [
+            "ACKNOWLEDGE",
+            "RESOLVE",
+            "ESCALATE",
+            "MARK_FALSE_ALARM",
+            "ADD_NOTE",
+            "LOG_INTERVENTION",
+        ]
+        assert "UNIQUE" in partial_index
+        assert "ACTIVE" in partial_index
+        assert "ACKNOWLEDGED" in partial_index
 
         migrate(
             temporary_url.render_as_string(hide_password=False),
@@ -108,10 +200,19 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                     "WHERE pg_type.typname = 'condition_key'"
                 )
             ).scalars().all()
+            removed_alert_types = connection.execute(
+                text(
+                    "SELECT typname FROM pg_type "
+                    "WHERE typname IN ('alert_status', 'alert_action_type')"
+                )
+            ).scalars().all()
         # PostgreSQL enum values are intentionally retained by the existing
         # partially irreversible downgrade.
         assert "HR_NORMAL" in enum_values
         assert "SPO2_NORMAL" in enum_values
+        # Unlike the older condition_key extension, the Phase 5A enum types
+        # are removable after their dependent tables are dropped.
+        assert removed_alert_types == []
 
         migrate(temporary_url.render_as_string(hide_password=False), "upgrade", "head")
         assert "ck_patient_hr_range_order" in {
@@ -120,6 +221,9 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                 "elderly_patients"
             )
         }
+        assert {"alerts", "alert_actions"}.issubset(
+            inspect(engine).get_table_names()
+        )
     finally:
         engine.dispose()
         with admin_engine.connect() as connection:

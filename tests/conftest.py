@@ -70,6 +70,8 @@ def integration_engine(test_database_url: str) -> Generator[Engine, None, None]:
 @pytest.fixture()
 def db_session(integration_engine: Engine) -> Generator[Session, None, None]:
     table_names = [
+        "alert_actions",
+        "alerts",
         "condition_trackers",
         "event_evaluations",
         "health_events",

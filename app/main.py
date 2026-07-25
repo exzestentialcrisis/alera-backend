@@ -14,7 +14,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(health_event_router)
 
     @application.get("/health")
-    def health_check() -> dict[str, str]:
+    async def health_check() -> dict[str, str]:
         return {
             "status": "healthy",
             "service": app_settings.app_name,
