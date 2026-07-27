@@ -27,14 +27,21 @@ Alert creation and notification delivery remain separate concerns.
 Notification, aggregation, cooldown, and suppression behavior is deferred to
 later Phase 5 work.
 
-## Phase 5B immediate Critical alerts
+## Phase 5 alert behavior
 
 A `VALID_REALTIME` heart-rate reading above 150 bpm or SpO₂ reading below
 90% produces a Critical evaluation and an ACTIVE Critical alert in the same
 transaction. For example, submitting a heart-rate value of `151` through the
 health-event ingestion pipeline should create an `HR_HIGH` alert and link the
-event evaluation to it. Warning alerts and notification delivery remain
-deferred.
+event evaluation to it.
+
+Heart-rate Warning alerts require five elapsed minutes of continuously abnormal
+accepted real-time readings. Gaps up to and including 90 seconds preserve the
+occurrence, including a planned approximately 30-second sensor interruption;
+larger gaps restart its timer. Persistence uses event timestamps, and duration
+alone never escalates a Warning to Critical. Raw sensor callbacks are not
+expected to be stored individually. SpO₂ Warning persistence remains TBD, and
+notification delivery remains deferred.
 
 ## Deferred security work
 

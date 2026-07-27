@@ -2,16 +2,36 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.condition_trackers.service import update_condition_tracker
-from app.alerts.service import process_immediate_critical_alert
+from app.condition_trackers.service import (
+    ConditionTrackerUpdateResult,
+    TrackerUpdateIgnoredReason,
+    update_condition_tracker,
+)
+from app.alerts.service import (
+    process_immediate_critical_alert,
+    process_persistent_hr_warning,
+)
 from app.event_evaluations.model import (
     ConditionKey,
     EvaluationSeverity,
     EventEvaluation,
     MonitoringState,
 )
-from app.health_events.model import HealthEvent, MetricType
+from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 from app.patients.model import ElderlyPatient
+
+
+def _update_realtime_tracker(
+    db: Session,
+    event: HealthEvent,
+    evaluation: EventEvaluation,
+) -> ConditionTrackerUpdateResult:
+    if event.validation_status != ValidationStatus.VALID_REALTIME:
+        return ConditionTrackerUpdateResult(
+            applied=False,
+            ignored_reason=TrackerUpdateIgnoredReason.INELIGIBLE_VALIDATION_STATUS,
+        )
+    return update_condition_tracker(db, event, evaluation)
 
 
 def evaluate_event(
@@ -102,12 +122,13 @@ def evaluate_heart_rate_event(
     db.add(evaluation)
     db.flush()
 
-    tracker_result = update_condition_tracker(
+    tracker_result = _update_realtime_tracker(
         db=db,
         event=event,
         evaluation=evaluation,
     )
     process_immediate_critical_alert(db, event, evaluation, tracker_result)
+    process_persistent_hr_warning(db, event, evaluation, tracker_result)
 
     return evaluation
 
@@ -169,7 +190,7 @@ def evaluate_spo2_event(
     db.add(evaluation)
     db.flush()
 
-    tracker_result = update_condition_tracker(
+    tracker_result = _update_realtime_tracker(
         db=db,
         event=event,
         evaluation=evaluation,

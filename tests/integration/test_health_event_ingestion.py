@@ -69,7 +69,10 @@ def test_invalid_metric_is_stored_without_evaluation_or_tracker(
     assert db_session.scalar(select(func.count(ConditionTracker.condition_tracker_id))) == 0
 
 
-def test_delayed_usable_new_event_updates_tracker(db_session, patient):
+def test_delayed_usable_new_event_does_not_update_realtime_tracker(
+    db_session,
+    patient,
+):
     event = create(
         db_session,
         patient,
@@ -77,6 +80,6 @@ def test_delayed_usable_new_event_updates_tracker(db_session, patient):
         validation_status=ValidationStatus.DELAYED_USABLE,
         validation_reason="uploaded after reconnect",
     )
-    tracker = db_session.scalar(select(ConditionTracker))
-    assert tracker.active is True
-    assert tracker.last_event_id == event.event_id
+    assert db_session.get(HealthEvent, event.event_id) is not None
+    assert db_session.scalar(select(EventEvaluation)) is not None
+    assert db_session.scalar(select(ConditionTracker)) is None

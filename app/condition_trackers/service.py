@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 import enum
 import hashlib
@@ -25,6 +25,9 @@ RESOLVABLE_CONDITIONS: dict[MetricType, list[ConditionKey]] = {
     ],
 }
 
+HR_CONTINUITY_GAP = timedelta(seconds=90)
+HR_CONDITIONS = {ConditionKey.HR_HIGH, ConditionKey.HR_LOW}
+
 
 NORMAL_CONDITIONS = {
     ConditionKey.HR_NORMAL,
@@ -46,6 +49,7 @@ class TrackerUpdateIgnoredReason(str, enum.Enum):
     EQUAL_TIMESTAMP_LOWER_PRIORITY = "EQUAL_TIMESTAMP_LOWER_PRIORITY"
     NORMAL_RESOLUTION = "NORMAL_RESOLUTION"
     NO_RESOLVABLE_CONDITION = "NO_RESOLVABLE_CONDITION"
+    INELIGIBLE_VALIDATION_STATUS = "INELIGIBLE_VALIDATION_STATUS"
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,8 @@ class ConditionTrackerUpdateResult:
     tracker: ConditionTracker | None = None
     resolved_trackers: tuple[ConditionTracker, ...] = ()
     ignored_reason: TrackerUpdateIgnoredReason | None = None
+    occurrence_started: bool = False
+    previous_started_at: datetime | None = None
 
 
 def _signed_int32(value: int) -> int:
@@ -171,6 +177,8 @@ def update_condition_tracker(
         )
 
         db.add(tracker)
+        occurrence_started = True
+        previous_started_at = None
 
     else:
         ignored_reason = _ignored_ordering_reason(
@@ -186,11 +194,21 @@ def update_condition_tracker(
                 ignored_reason=ignored_reason,
             )
 
+        previous_started_at = tracker.started_at
+        occurrence_started = not tracker.active
+
         # Start a new occurrence period when a previously resolved
         # condition becomes active again.
-        if not tracker.active:
+        if (
+            not tracker.active
+            or (
+                evaluation.condition_key in HR_CONDITIONS
+                and event.recorded_at - tracker.last_seen_at > HR_CONTINUITY_GAP
+            )
+        ):
             tracker.started_at = event.recorded_at
             tracker.confirmed_at = None
+            occurrence_started = True
 
         tracker.last_event_id = event.event_id
         tracker.last_seen_at = event.recorded_at
@@ -205,7 +223,12 @@ def update_condition_tracker(
 
     db.flush()
 
-    return ConditionTrackerUpdateResult(applied=True, tracker=tracker)
+    return ConditionTrackerUpdateResult(
+        applied=True,
+        tracker=tracker,
+        occurrence_started=occurrence_started,
+        previous_started_at=previous_started_at,
+    )
 
 
 def resolve_metric_conditions(

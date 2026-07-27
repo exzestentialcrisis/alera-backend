@@ -7,7 +7,7 @@ import pytest
 
 import app.event_evaluations.service as evaluation_service
 from app.event_evaluations.model import ConditionKey, MonitoringState
-from app.health_events.model import HealthEvent, MetricType
+from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 
 
 def evaluate(monkeypatch, value, hr_min=60, hr_max=100):
@@ -22,11 +22,17 @@ def evaluate(monkeypatch, value, hr_min=60, hr_max=100):
         "process_immediate_critical_alert",
         Mock(),
     )
+    monkeypatch.setattr(
+        evaluation_service,
+        "process_persistent_hr_warning",
+        Mock(),
+    )
     event = HealthEvent(
         event_id=uuid4(),
         patient_id=uuid4(),
         metric_type=MetricType.HEART_RATE,
         numeric_value=Decimal(value),
+        validation_status=ValidationStatus.VALID_REALTIME,
     )
     return evaluation_service.evaluate_heart_rate_event(db, event)
 

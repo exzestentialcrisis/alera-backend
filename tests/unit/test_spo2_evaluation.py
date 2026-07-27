@@ -7,7 +7,7 @@ import pytest
 
 import app.event_evaluations.service as evaluation_service
 from app.event_evaluations.model import ConditionKey, MonitoringState
-from app.health_events.model import HealthEvent, MetricType
+from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 
 
 def evaluate(monkeypatch, value, minimum=95):
@@ -24,6 +24,7 @@ def evaluate(monkeypatch, value, minimum=95):
         patient_id=uuid4(),
         metric_type=MetricType.SPO2,
         numeric_value=Decimal(value),
+        validation_status=ValidationStatus.VALID_REALTIME,
     )
     return evaluation_service.evaluate_spo2_event(db, event)
 
