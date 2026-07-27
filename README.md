@@ -50,6 +50,57 @@ the count. Duration alone never escalates an SpO₂ Warning to Critical.
 Raw sensor callbacks are not expected to be stored individually. Notification
 delivery remains deferred.
 
+## Caregiver Alert API MVP
+
+The development caregiver API exposes:
+
+```text
+GET  /api/v1/alerts
+GET  /api/v1/alerts/{alert_id}
+GET  /api/v1/alerts/{alert_id}/actions
+POST /api/v1/alerts/{alert_id}/acknowledge
+POST /api/v1/alerts/{alert_id}/resolve
+POST /api/v1/alerts/{alert_id}/false-alarm
+POST /api/v1/alerts/{alert_id}/notes
+POST /api/v1/alerts/{alert_id}/interventions
+```
+
+GET requests are temporarily unauthenticated. Every POST requires an existing
+user UUID in `X-Alera-Actor-Id`:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/alerts/ALERT_UUID/acknowledge \
+  -H 'Content-Type: application/json' \
+  -H 'X-Alera-Actor-Id: USER_UUID' \
+  -d '{"note":"I am reviewing this alert."}'
+```
+
+This header is development-only identity handling and is **not authentication
+or authorization**. It must be replaced before production use.
+
+Lifecycle transitions are `ACTIVE → ACKNOWLEDGED → RESOLVED`, with either
+`ACTIVE` or `ACKNOWLEDGED` also permitted to become `FALSE_ALARM`. Repeating an
+already-completed lifecycle transition is idempotent. Notes and interventions
+do not change status, and caregiver resolution does not change physiological
+condition trackers.
+
+The Caregiver App can poll nonterminal alerts with pagination:
+
+```bash
+curl 'http://localhost:8000/api/v1/alerts?status=ACTIVE&status=ACKNOWLEDGED&limit=20&offset=0'
+```
+
+Action responses contain the updated alert, the new action (or `null` for an
+idempotent repeat), and an `idempotent` flag:
+
+```json
+{
+  "alert": {"alert_id": "…", "status": "ACKNOWLEDGED", "severity": "CRITICAL"},
+  "action": {"action_type": "ACKNOWLEDGE", "action_note": "Reviewing"},
+  "idempotent": false
+}
+```
+
 ## Deferred security work
 
 Health-event ingestion does not yet authenticate or authorize its source. Future
