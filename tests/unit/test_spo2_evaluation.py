@@ -14,6 +14,11 @@ def evaluate(monkeypatch, value, minimum=95):
     db = Mock()
     db.get.return_value = SimpleNamespace(usual_spo2_min=minimum)
     monkeypatch.setattr(evaluation_service, "update_condition_tracker", Mock())
+    monkeypatch.setattr(
+        evaluation_service,
+        "process_immediate_critical_alert",
+        Mock(),
+    )
     event = HealthEvent(
         event_id=uuid4(),
         patient_id=uuid4(),

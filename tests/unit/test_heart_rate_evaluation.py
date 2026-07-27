@@ -17,6 +17,11 @@ def evaluate(monkeypatch, value, hr_min=60, hr_max=100):
         normal_hr_max=hr_max,
     )
     monkeypatch.setattr(evaluation_service, "update_condition_tracker", Mock())
+    monkeypatch.setattr(
+        evaluation_service,
+        "process_immediate_critical_alert",
+        Mock(),
+    )
     event = HealthEvent(
         event_id=uuid4(),
         patient_id=uuid4(),

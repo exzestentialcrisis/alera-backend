@@ -1,4 +1,6 @@
 from datetime import datetime
+from dataclasses import dataclass
+import enum
 import hashlib
 
 from sqlalchemy import func, select
@@ -39,6 +41,21 @@ STATE_RANK = {
 }
 
 
+class TrackerUpdateIgnoredReason(str, enum.Enum):
+    STALE_EVENT = "STALE_EVENT"
+    EQUAL_TIMESTAMP_LOWER_PRIORITY = "EQUAL_TIMESTAMP_LOWER_PRIORITY"
+    NORMAL_RESOLUTION = "NORMAL_RESOLUTION"
+    NO_RESOLVABLE_CONDITION = "NO_RESOLVABLE_CONDITION"
+
+
+@dataclass(frozen=True)
+class ConditionTrackerUpdateResult:
+    applied: bool
+    tracker: ConditionTracker | None = None
+    resolved_trackers: tuple[ConditionTracker, ...] = ()
+    ignored_reason: TrackerUpdateIgnoredReason | None = None
+
+
 def _signed_int32(value: int) -> int:
     value &= 0xFFFFFFFF
     return value if value < 0x80000000 else value - 0x100000000
@@ -77,16 +94,16 @@ def _get_tracker(
     )
 
 
-def _should_apply_event(
+def _ignored_ordering_reason(
     db: Session,
     tracker: ConditionTracker,
     event: HealthEvent,
     incoming_state: MonitoringState,
-) -> bool:
+) -> TrackerUpdateIgnoredReason | None:
     if event.recorded_at > tracker.last_seen_at:
-        return True
+        return None
     if event.recorded_at < tracker.last_seen_at:
-        return False
+        return TrackerUpdateIgnoredReason.STALE_EVENT
 
     # Equal observation times never reduce severity. For equal severity, the
     # later-ingested event (created_at, then UUID) wins deterministically.
@@ -101,22 +118,26 @@ def _should_apply_event(
         else MonitoringState.STABLE
     )
     if STATE_RANK[incoming_state] != STATE_RANK[current_state]:
-        return STATE_RANK[incoming_state] > STATE_RANK[current_state]
+        if STATE_RANK[incoming_state] > STATE_RANK[current_state]:
+            return None
+        return TrackerUpdateIgnoredReason.EQUAL_TIMESTAMP_LOWER_PRIORITY
 
     current_event = db.get(HealthEvent, tracker.last_event_id)
     if current_event is None:
-        return True
-    return (event.created_at, event.event_id.int) > (
+        return None
+    if (event.created_at, event.event_id.int) > (
         current_event.created_at,
         current_event.event_id.int,
-    )
+    ):
+        return None
+    return TrackerUpdateIgnoredReason.EQUAL_TIMESTAMP_LOWER_PRIORITY
 
 
 def update_condition_tracker(
     db: Session,
     event: HealthEvent,
     evaluation: EventEvaluation,
-) -> ConditionTracker | None:
+) -> ConditionTrackerUpdateResult:
     now = utc_now()
 
     if evaluation.new_state == MonitoringState.STABLE:
@@ -128,7 +149,10 @@ def update_condition_tracker(
 
     # Normal classifications should never create condition trackers.
     if evaluation.condition_key in NORMAL_CONDITIONS:
-        return None
+        return ConditionTrackerUpdateResult(
+            applied=False,
+            ignored_reason=TrackerUpdateIgnoredReason.NO_RESOLVABLE_CONDITION,
+        )
 
     _lock_tracker_key(db, event.patient_id, evaluation.condition_key)
     tracker = _get_tracker(db, event, evaluation.condition_key)
@@ -148,7 +172,20 @@ def update_condition_tracker(
 
         db.add(tracker)
 
-    elif _should_apply_event(db, tracker, event, evaluation.new_state):
+    else:
+        ignored_reason = _ignored_ordering_reason(
+            db,
+            tracker,
+            event,
+            evaluation.new_state,
+        )
+        if ignored_reason is not None:
+            return ConditionTrackerUpdateResult(
+                applied=False,
+                tracker=tracker,
+                ignored_reason=ignored_reason,
+            )
+
         # Start a new occurrence period when a previously resolved
         # condition becomes active again.
         if not tracker.active:
@@ -168,20 +205,24 @@ def update_condition_tracker(
 
     db.flush()
 
-    return tracker
+    return ConditionTrackerUpdateResult(applied=True, tracker=tracker)
 
 
 def resolve_metric_conditions(
     db: Session,
     event: HealthEvent,
     now: datetime,
-) -> ConditionTracker | None:
+) -> ConditionTrackerUpdateResult:
     condition_keys = RESOLVABLE_CONDITIONS.get(event.metric_type, [])
 
     if not condition_keys:
-        return None
+        return ConditionTrackerUpdateResult(
+            applied=False,
+            ignored_reason=TrackerUpdateIgnoredReason.NO_RESOLVABLE_CONDITION,
+        )
 
     trackers: list[ConditionTracker] = []
+    ignored_reasons: list[TrackerUpdateIgnoredReason] = []
     for condition_key in sorted(condition_keys, key=lambda key: key.value):
         _lock_tracker_key(db, event.patient_id, condition_key)
         tracker = _get_tracker(db, event, condition_key)
@@ -200,7 +241,16 @@ def resolve_metric_conditions(
             )
             db.add(tracker)
             trackers.append(tracker)
-        elif _should_apply_event(db, tracker, event, MonitoringState.STABLE):
+        else:
+            ignored_reason = _ignored_ordering_reason(
+                db,
+                tracker,
+                event,
+                MonitoringState.STABLE,
+            )
+            if ignored_reason is not None:
+                ignored_reasons.append(ignored_reason)
+                continue
             tracker.active = False
             tracker.last_event_id = event.event_id
             tracker.last_seen_at = event.recorded_at
@@ -209,4 +259,17 @@ def resolve_metric_conditions(
 
     db.flush()
 
-    return trackers[0] if trackers else None
+    if trackers:
+        return ConditionTrackerUpdateResult(
+            applied=True,
+            resolved_trackers=tuple(trackers),
+            ignored_reason=TrackerUpdateIgnoredReason.NORMAL_RESOLUTION,
+        )
+    return ConditionTrackerUpdateResult(
+        applied=False,
+        ignored_reason=(
+            TrackerUpdateIgnoredReason.STALE_EVENT
+            if TrackerUpdateIgnoredReason.STALE_EVENT in ignored_reasons
+            else TrackerUpdateIgnoredReason.EQUAL_TIMESTAMP_LOWER_PRIORITY
+        ),
+    )

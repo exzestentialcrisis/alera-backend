@@ -3,6 +3,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.condition_trackers.service import update_condition_tracker
+from app.alerts.service import process_immediate_critical_alert
 from app.event_evaluations.model import (
     ConditionKey,
     EvaluationSeverity,
@@ -101,11 +102,12 @@ def evaluate_heart_rate_event(
     db.add(evaluation)
     db.flush()
 
-    update_condition_tracker(
+    tracker_result = update_condition_tracker(
         db=db,
         event=event,
         evaluation=evaluation,
     )
+    process_immediate_critical_alert(db, event, evaluation, tracker_result)
 
     return evaluation
 
@@ -167,10 +169,11 @@ def evaluate_spo2_event(
     db.add(evaluation)
     db.flush()
 
-    update_condition_tracker(
+    tracker_result = update_condition_tracker(
         db=db,
         event=event,
         evaluation=evaluation,
     )
+    process_immediate_critical_alert(db, event, evaluation, tracker_result)
 
     return evaluation

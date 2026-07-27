@@ -27,6 +27,15 @@ Alert creation and notification delivery remain separate concerns.
 Notification, aggregation, cooldown, and suppression behavior is deferred to
 later Phase 5 work.
 
+## Phase 5B immediate Critical alerts
+
+A `VALID_REALTIME` heart-rate reading above 150 bpm or SpO₂ reading below
+90% produces a Critical evaluation and an ACTIVE Critical alert in the same
+transaction. For example, submitting a heart-rate value of `151` through the
+health-event ingestion pipeline should create an `HR_HIGH` alert and link the
+event evaluation to it. Warning alerts and notification delivery remain
+deferred.
+
 ## Deferred security work
 
 Health-event ingestion does not yet authenticate or authorize its source. Future
