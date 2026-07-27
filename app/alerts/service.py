@@ -20,6 +20,7 @@ NORMAL_CONDITIONS = {
 }
 HR_WARNING_CONDITIONS = {ConditionKey.HR_HIGH, ConditionKey.HR_LOW}
 HR_WARNING_PERSISTENCE = timedelta(minutes=5)
+SPO2_WARNING_MEASUREMENT_COUNT = 2
 
 
 def _find_unresolved_alert(
@@ -133,6 +134,67 @@ def process_persistent_hr_warning(
         db.flush()
 
     # Do not downgrade Critical severity or change caregiver-handling status.
+    evaluation.alert_id = alert.alert_id
+    db.flush()
+    return alert
+
+
+def process_consecutive_spo2_warning(
+    db: Session,
+    event: HealthEvent,
+    evaluation: EventEvaluation,
+    tracker_result: ConditionTrackerUpdateResult,
+) -> Alert | None:
+    """Create or reuse a SpO₂ Warning after two accepted candidates."""
+    tracker = tracker_result.tracker
+    if (
+        event.validation_status != ValidationStatus.VALID_REALTIME
+        or evaluation.severity != EvaluationSeverity.WARNING
+        or evaluation.condition_key != ConditionKey.SPO2_LOW
+        or not tracker_result.applied
+        or tracker is None
+        or not tracker.active
+        or tracker.last_event_id != event.event_id
+    ):
+        return None
+
+    alert = _find_unresolved_alert(db, event, evaluation)
+    if (
+        tracker.consecutive_event_count < SPO2_WARNING_MEASUREMENT_COUNT
+        and (
+            alert is None
+            or alert.severity != EvaluationSeverity.CRITICAL
+        )
+    ):
+        return None
+
+    evaluation.persistence_met = True
+    if alert is None:
+        alert = db.scalar(
+            select(Alert)
+            .where(
+                Alert.patient_id == event.patient_id,
+                Alert.condition_key == evaluation.condition_key,
+                Alert.detected_at == tracker.started_at,
+            )
+            .order_by(Alert.created_at.desc())
+            .with_for_update()
+        )
+
+    if alert is None:
+        alert = Alert(
+            patient_id=event.patient_id,
+            condition_key=evaluation.condition_key,
+            severity=EvaluationSeverity.WARNING,
+            status=AlertStatus.ACTIVE,
+            detected_at=tracker.started_at,
+            confirmed_at=event.recorded_at,
+            resolved_at=None,
+        )
+        db.add(alert)
+        db.flush()
+
+    # Existing Critical severity and all caregiver-handling states are kept.
     evaluation.alert_id = alert.alert_id
     db.flush()
     return alert

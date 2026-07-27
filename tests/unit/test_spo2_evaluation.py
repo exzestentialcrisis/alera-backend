@@ -19,6 +19,11 @@ def evaluate(monkeypatch, value, minimum=95):
         "process_immediate_critical_alert",
         Mock(),
     )
+    monkeypatch.setattr(
+        evaluation_service,
+        "process_consecutive_spo2_warning",
+        Mock(),
+    )
     event = HealthEvent(
         event_id=uuid4(),
         patient_id=uuid4(),
@@ -33,7 +38,8 @@ def evaluate(monkeypatch, value, minimum=95):
     ("value", "state", "condition"),
     [
         ("97", MonitoringState.STABLE, ConditionKey.SPO2_NORMAL),
-        ("94", MonitoringState.ELEVATED, ConditionKey.SPO2_LOW),
+        ("94", MonitoringState.STABLE, ConditionKey.SPO2_NORMAL),
+        ("93", MonitoringState.ELEVATED, ConditionKey.SPO2_LOW),
         ("95", MonitoringState.STABLE, ConditionKey.SPO2_NORMAL),
         ("90", MonitoringState.ELEVATED, ConditionKey.SPO2_LOW),
         ("89.99", MonitoringState.CRITICAL, ConditionKey.SPO2_LOW),
@@ -45,6 +51,6 @@ def test_spo2_boundaries(monkeypatch, value, state, condition):
     assert result.condition_key == condition
 
 
-def test_custom_spo2_minimum_is_used(monkeypatch):
-    assert evaluate(monkeypatch, "93", minimum=92).new_state == MonitoringState.STABLE
+def test_warning_band_is_independent_of_patient_baseline(monkeypatch):
+    assert evaluate(monkeypatch, "93", minimum=92).new_state == MonitoringState.ELEVATED
     assert evaluate(monkeypatch, "91", minimum=92).new_state == MonitoringState.ELEVATED

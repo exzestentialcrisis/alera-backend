@@ -8,6 +8,7 @@ from app.condition_trackers.service import (
     update_condition_tracker,
 )
 from app.alerts.service import (
+    process_consecutive_spo2_warning,
     process_immediate_critical_alert,
     process_persistent_hr_warning,
 )
@@ -157,14 +158,13 @@ def evaluate_spo2_event(
         severity = EvaluationSeverity.CRITICAL
         reason = f"SpO₂ {value}% fell below the critical " "threshold of 90%."
 
-    elif value < Decimal(patient.usual_spo2_min):
+    elif value <= Decimal("93"):
         condition = ConditionKey.SPO2_LOW
-        threshold = Decimal(patient.usual_spo2_min)
+        threshold = Decimal("93")
         new_state = MonitoringState.ELEVATED
         severity = EvaluationSeverity.WARNING
         reason = (
-            f"SpO₂ {value}% fell below the patient's "
-            f"usual minimum of {patient.usual_spo2_min}%."
+            f"SpO₂ {value}% is within the Warning range of 90% through 93%."
         )
 
     else:
@@ -196,5 +196,6 @@ def evaluate_spo2_event(
         evaluation=evaluation,
     )
     process_immediate_critical_alert(db, event, evaluation, tracker_result)
+    process_consecutive_spo2_warning(db, event, evaluation, tracker_result)
 
     return evaluation

@@ -10,10 +10,11 @@ from app.condition_trackers.model import ConditionTracker
 from app.core.time import utc_now
 from app.event_evaluations.model import (
     ConditionKey,
+    EvaluationSeverity,
     EventEvaluation,
     MonitoringState,
 )
-from app.health_events.model import HealthEvent, MetricType
+from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 
 RESOLVABLE_CONDITIONS: dict[MetricType, list[ConditionKey]] = {
     MetricType.HEART_RATE: [
@@ -27,6 +28,7 @@ RESOLVABLE_CONDITIONS: dict[MetricType, list[ConditionKey]] = {
 
 HR_CONTINUITY_GAP = timedelta(seconds=90)
 HR_CONDITIONS = {ConditionKey.HR_HIGH, ConditionKey.HR_LOW}
+SPO2_CONTINUITY_GAP = timedelta(minutes=5)
 
 
 NORMAL_CONDITIONS = {
@@ -144,6 +146,12 @@ def update_condition_tracker(
     event: HealthEvent,
     evaluation: EventEvaluation,
 ) -> ConditionTrackerUpdateResult:
+    if event.validation_status != ValidationStatus.VALID_REALTIME:
+        return ConditionTrackerUpdateResult(
+            applied=False,
+            ignored_reason=TrackerUpdateIgnoredReason.INELIGIBLE_VALIDATION_STATUS,
+        )
+
     now = utc_now()
 
     if evaluation.new_state == MonitoringState.STABLE:
@@ -164,6 +172,14 @@ def update_condition_tracker(
     tracker = _get_tracker(db, event, evaluation.condition_key)
 
     if tracker is None:
+        consecutive_event_count = (
+            1
+            if (
+                evaluation.condition_key == ConditionKey.SPO2_LOW
+                and evaluation.severity == EvaluationSeverity.WARNING
+            )
+            else 0
+        )
         tracker = ConditionTracker(
             patient_id=event.patient_id,
             last_event_id=event.event_id,
@@ -174,6 +190,7 @@ def update_condition_tracker(
             confirmed_at=(
                 now if evaluation.new_state == MonitoringState.CRITICAL else None
             ),
+            consecutive_event_count=consecutive_event_count,
         )
 
         db.add(tracker)
@@ -199,16 +216,31 @@ def update_condition_tracker(
 
         # Start a new occurrence period when a previously resolved
         # condition becomes active again.
-        if (
+        occurrence_restarted = (
             not tracker.active
             or (
                 evaluation.condition_key in HR_CONDITIONS
                 and event.recorded_at - tracker.last_seen_at > HR_CONTINUITY_GAP
             )
-        ):
+            or (
+                evaluation.condition_key == ConditionKey.SPO2_LOW
+                and event.recorded_at - tracker.last_seen_at > SPO2_CONTINUITY_GAP
+            )
+        )
+        if occurrence_restarted:
             tracker.started_at = event.recorded_at
             tracker.confirmed_at = None
             occurrence_started = True
+
+        if evaluation.condition_key == ConditionKey.SPO2_LOW:
+            if evaluation.severity == EvaluationSeverity.WARNING:
+                tracker.consecutive_event_count = (
+                    1
+                    if occurrence_restarted
+                    else tracker.consecutive_event_count + 1
+                )
+            else:
+                tracker.consecutive_event_count = 0
 
         tracker.last_event_id = event.event_id
         tracker.last_seen_at = event.recorded_at
@@ -275,6 +307,7 @@ def resolve_metric_conditions(
                 ignored_reasons.append(ignored_reason)
                 continue
             tracker.active = False
+            tracker.consecutive_event_count = 0
             tracker.last_event_id = event.event_id
             tracker.last_seen_at = event.recorded_at
             tracker.updated_at = now

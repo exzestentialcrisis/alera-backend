@@ -39,9 +39,16 @@ Heart-rate Warning alerts require five elapsed minutes of continuously abnormal
 accepted real-time readings. Gaps up to and including 90 seconds preserve the
 occurrence, including a planned approximately 30-second sensor interruption;
 larger gaps restart its timer. Persistence uses event timestamps, and duration
-alone never escalates a Warning to Critical. Raw sensor callbacks are not
-expected to be stored individually. SpO₂ Warning persistence remains TBD, and
-notification delivery remains deferred.
+alone never escalates a Warning to Critical.
+
+For SpO₂, values below 90% create an immediate Critical alert, values from 90%
+through 93% are Warning candidates, and values of 94% or above are normal. Two
+consecutive accepted Warning candidates qualify a Warning alert. Gaps up to and
+including five minutes preserve the consecutive occurrence; larger gaps restart
+the count. Duration alone never escalates an SpO₂ Warning to Critical.
+
+Raw sensor callbacks are not expected to be stored individually. Notification
+delivery remains deferred.
 
 ## Deferred security work
 

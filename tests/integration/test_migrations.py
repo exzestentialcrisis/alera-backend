@@ -109,6 +109,12 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             and item["column_names"] == ["patient_id", "condition_key"]
             for item in tracker_uniques
         )
+        tracker_columns = {
+            column["name"]: column
+            for column in inspector.get_columns("condition_trackers")
+        }
+        assert tracker_columns["consecutive_event_count"]["nullable"] is False
+        assert str(tracker_columns["consecutive_event_count"]["default"]) == "0"
 
         patient_columns = {
             column["name"]: column for column in inspector.get_columns("elderly_patients")
@@ -224,6 +230,13 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         assert {"alerts", "alert_actions"}.issubset(
             inspect(engine).get_table_names()
         )
+        reupgraded_tracker_columns = {
+            column["name"]: column
+            for column in inspect(engine).get_columns("condition_trackers")
+        }
+        assert reupgraded_tracker_columns["consecutive_event_count"][
+            "nullable"
+        ] is False
     finally:
         engine.dispose()
         with admin_engine.connect() as connection:
