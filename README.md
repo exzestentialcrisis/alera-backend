@@ -86,18 +86,19 @@ POST /api/v1/alerts/{alert_id}/notes
 POST /api/v1/alerts/{alert_id}/interventions
 ```
 
-GET requests are temporarily unauthenticated. Every POST requires an existing
-user UUID in `X-Alera-Actor-Id`:
+Every alert route requires a bearer access token issued by the caregiver login
+endpoint. Results are scoped to actively assigned patients for caregivers and
+owned households for care admins:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/alerts/ALERT_UUID/acknowledge \
   -H 'Content-Type: application/json' \
-  -H 'X-Alera-Actor-Id: USER_UUID' \
+  -H 'Authorization: Bearer ACCESS_TOKEN' \
   -d '{"note":"I am reviewing this alert."}'
 ```
 
-This header is development-only identity handling and is **not authentication
-or authorization**. It must be replaced before production use.
+The temporary `X-Alera-Actor-Id` header remains only on the Phase 9A household
+access administration endpoints; it is not accepted as authority by alert routes.
 
 Lifecycle transitions are `ACTIVE → ACKNOWLEDGED → RESOLVED`, with either
 `ACTIVE` or `ACKNOWLEDGED` also permitted to become `FALSE_ALARM`. Repeating an
@@ -108,7 +109,8 @@ condition trackers.
 The Caregiver App can poll nonterminal alerts with pagination:
 
 ```bash
-curl 'http://localhost:8000/api/v1/alerts?status=ACTIVE&status=ACKNOWLEDGED&limit=20&offset=0'
+curl 'http://localhost:8000/api/v1/alerts?status=ACTIVE&status=ACKNOWLEDGED&limit=20&offset=0' \
+  -H 'Authorization: Bearer ACCESS_TOKEN'
 ```
 
 Action responses contain the updated alert, the new action (or `null` for an

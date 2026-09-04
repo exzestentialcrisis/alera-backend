@@ -1,16 +1,17 @@
 """Create an idempotent caregiver demo using the production ingestion pipeline."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.alerts.model import Alert, AlertStatus
+from app.core.time import utc_now
 from app.db.database import get_session_factory
 from app.event_evaluations.model import ConditionKey
-from app.health_events.model import MetricType, ValidationStatus
+from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 from app.health_events.schema import HealthEventCreate
 from app.health_events.service import create_health_event
 from app.households.model import Household
@@ -21,8 +22,13 @@ DEMO_HOUSEHOLD_ID = UUID("33333333-3333-3333-3333-333333333333")
 DEMO_PATIENT_ID = UUID("a076ecdb-ae38-4f84-b490-e714977027ee")
 DEMO_HOUSEHOLD_CODE = "4V8F-29HC"
 DEMO_PATIENT_DISPLAY_NAME = "Alera Test Patient"
-DEMO_EVENT_PREFIX = "alera-demo-v1"
-DEMO_START = datetime(2026, 1, 15, 8, 0, tzinfo=timezone.utc)
+DEMO_EVENT_PREFIX = "alera-demo-v2"
+DEMO_EVENT_OFFSETS = {
+    "hr-normal": timedelta(),
+    "hr-critical": timedelta(minutes=1),
+    "spo2-normal": timedelta(minutes=2),
+    "spo2-critical": timedelta(minutes=3),
+}
 
 
 @dataclass(frozen=True)
@@ -66,11 +72,46 @@ def _get_fixture_patient(db: Session) -> ElderlyPatient:
     return patient
 
 
-def _demo_events(patient: ElderlyPatient) -> tuple[HealthEventCreate, ...]:
+def _demo_start(db: Session, patient: ElderlyPatient) -> datetime:
+    """Choose one reusable anchor newer than the patient's tracker watermarks."""
+    external_ids = [
+        f"{DEMO_EVENT_PREFIX}-{suffix}" for suffix in DEMO_EVENT_OFFSETS
+    ]
+    existing = db.scalars(
+        select(HealthEvent).where(HealthEvent.external_event_id.in_(external_ids))
+    ).all()
+    if existing:
+        anchors = {
+            event.recorded_at
+            - DEMO_EVENT_OFFSETS[event.external_event_id.removeprefix(
+                f"{DEMO_EVENT_PREFIX}-"
+            )]
+            for event in existing
+            if event.external_event_id is not None
+        }
+        if len(anchors) != 1:
+            raise RuntimeError("Existing demo events have inconsistent timestamps.")
+        return anchors.pop()
+
+    latest_recorded_at = db.scalar(
+        select(func.max(HealthEvent.recorded_at)).where(
+            HealthEvent.patient_id == patient.patient_id
+        )
+    )
+    after_latest = (
+        latest_recorded_at + timedelta(minutes=1)
+        if latest_recorded_at is not None
+        else utc_now()
+    )
+    return max(utc_now(), after_latest)
+
+
+def _demo_events(db: Session, patient: ElderlyPatient) -> tuple[HealthEventCreate, ...]:
+    start = _demo_start(db, patient)
     common = {
         "patient_id": patient.patient_id,
         "validation_status": ValidationStatus.VALID_REALTIME,
-        "raw_payload": {"demo": True, "seed": "seed_demo_data.py", "version": 1},
+        "raw_payload": {"demo": True, "seed": "seed_demo_data.py", "version": 2},
     }
     return (
         HealthEventCreate(
@@ -79,7 +120,7 @@ def _demo_events(patient: ElderlyPatient) -> tuple[HealthEventCreate, ...]:
             metric_type=MetricType.HEART_RATE,
             numeric_value="78",
             metric_unit="BPM",
-            recorded_at=DEMO_START,
+            recorded_at=start + DEMO_EVENT_OFFSETS["hr-normal"],
         ),
         HealthEventCreate(
             **common,
@@ -87,7 +128,7 @@ def _demo_events(patient: ElderlyPatient) -> tuple[HealthEventCreate, ...]:
             metric_type=MetricType.HEART_RATE,
             numeric_value="154",
             metric_unit="BPM",
-            recorded_at=DEMO_START + timedelta(minutes=1),
+            recorded_at=start + DEMO_EVENT_OFFSETS["hr-critical"],
         ),
         HealthEventCreate(
             **common,
@@ -95,7 +136,7 @@ def _demo_events(patient: ElderlyPatient) -> tuple[HealthEventCreate, ...]:
             metric_type=MetricType.SPO2,
             numeric_value="97",
             metric_unit="%",
-            recorded_at=DEMO_START + timedelta(minutes=2),
+            recorded_at=start + DEMO_EVENT_OFFSETS["spo2-normal"],
         ),
         HealthEventCreate(
             **common,
@@ -103,7 +144,7 @@ def _demo_events(patient: ElderlyPatient) -> tuple[HealthEventCreate, ...]:
             metric_type=MetricType.SPO2,
             numeric_value="88",
             metric_unit="%",
-            recorded_at=DEMO_START + timedelta(minutes=3),
+            recorded_at=start + DEMO_EVENT_OFFSETS["spo2-critical"],
         ),
     )
 
@@ -113,7 +154,7 @@ def seed_demo_data(db: Session) -> DemoSeedResult:
 
     # This is intentionally the same service used by the ingestion API. It
     # evaluates each event and lets the normal tracker/alert rules run.
-    for event in _demo_events(patient):
+    for event in _demo_events(db, patient):
         create_health_event(db, event)
 
     alerts = tuple(

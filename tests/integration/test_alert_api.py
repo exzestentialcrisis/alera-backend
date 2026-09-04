@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.alert_actions.model import AlertAction, AlertActionType
+from app.auth.security import create_access_token
 from app.alerts.errors import AlertTransitionConflictError
 from app.alerts.model import Alert, AlertStatus
 from app.alerts.service import mark_false_alarm, resolve_alert
@@ -26,26 +27,48 @@ from app.event_evaluations.model import (
 from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 from app.health_events.schema import HealthEventCreate
 from app.health_events.service import create_health_event
+from app.household_access.model import CaregiverPatientAssignment
+from app.households.model import Household
 from app.main import create_app
+from app.patients.model import ElderlyPatient, Sex
 from app.users.model import User, UserRole
 
 pytestmark = pytest.mark.integration
 
 NOW = datetime.now(timezone.utc) - timedelta(minutes=10)
+JWT_SECRET = "alert-api-test-secret-that-is-long-and-random-enough"
 
 
 @pytest.fixture()
-def api_app(db_session):
-    app = create_app(Settings(environment="testing", database_url=None))
+def api_app(db_session, patient):
+    app = create_app(
+        Settings(
+            environment="testing",
+            database_url=None,
+            alera_jwt_secret=JWT_SECRET,
+        )
+    )
 
     async def override_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_db
+    household = db_session.get(Household, patient.household_id)
+    owner = db_session.get(User, household.created_by_user_id)
+    token, _ = create_access_token(
+        user_id=owner.user_id,
+        household_id=household.household_id,
+        secret=JWT_SECRET,
+        expires_minutes=30,
+    )
+    app.state.test_alert_headers = {"Authorization": f"Bearer {token}"}
     return app
 
 
 def request(app, method, path, **kwargs):
+    if "headers" not in kwargs:
+        kwargs["headers"] = app.state.test_alert_headers
+
     async def send():
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -57,10 +80,20 @@ def request(app, method, path, **kwargs):
 
 
 @pytest.fixture()
-def actor(db_session):
+def actor(db_session, patient):
     user = User(full_name="API Caregiver", role=UserRole.CAREGIVER)
     db_session.add(user)
+    db_session.flush()
+    household = db_session.get(Household, patient.household_id)
+    db_session.add(
+        CaregiverPatientAssignment(
+            caregiver_user_id=user.user_id,
+            patient_id=patient.patient_id,
+            assigned_by_user_id=household.created_by_user_id,
+        )
+    )
     db_session.commit()
+    user._test_household_id = household.household_id
     return user
 
 
@@ -80,7 +113,102 @@ def alert(db_session, patient):
 
 
 def actor_headers(actor):
-    return {"X-Alera-Actor-Id": str(actor.user_id)}
+    return jwt_headers(actor, actor._test_household_id)
+
+
+def jwt_headers(actor, household_id):
+    token, _ = create_access_token(
+        user_id=actor.user_id,
+        household_id=household_id,
+        secret=JWT_SECRET,
+        expires_minutes=30,
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_alert_scope_for_assigned_and_unassigned_caregivers(
+    api_app, db_session, patient, alert, actor
+):
+    assigned_headers = actor_headers(actor)
+    assigned_list = request(
+        api_app, "GET", "/api/v1/alerts", headers=assigned_headers
+    )
+    assert assigned_list.status_code == 200
+    assert [item["alert_id"] for item in assigned_list.json()["items"]] == [
+        str(alert.alert_id)
+    ]
+    assert request(
+        api_app,
+        "GET",
+        f"/api/v1/alerts/{alert.alert_id}",
+        headers=assigned_headers,
+    ).status_code == 200
+
+    unassigned = User(full_name="Unassigned Caregiver", role=UserRole.CAREGIVER)
+    db_session.add(unassigned)
+    db_session.commit()
+    denied_headers = jwt_headers(unassigned, patient.household_id)
+    denied_list = request(
+        api_app, "GET", "/api/v1/alerts", headers=denied_headers
+    )
+    assert denied_list.status_code == 200
+    assert denied_list.json()["items"] == []
+    assert denied_list.json()["total"] == 0
+    assert request(
+        api_app,
+        "GET",
+        f"/api/v1/alerts/{alert.alert_id}",
+        headers=denied_headers,
+    ).status_code == 404
+    assert request(
+        api_app,
+        "POST",
+        f"/api/v1/alerts/{alert.alert_id}/acknowledge",
+        headers=denied_headers,
+        json={},
+    ).status_code == 404
+
+
+def test_care_admin_alert_scope_is_limited_to_owned_households(
+    api_app, db_session, patient, alert
+):
+    owned_household = db_session.get(Household, patient.household_id)
+    owner = db_session.get(User, owned_household.created_by_user_id)
+    other_admin = User(full_name="Other Admin", role=UserRole.CARE_ADMIN)
+    other_patient_user = User(
+        full_name="Other Patient", role=UserRole.ELDERLY_PATIENT
+    )
+    db_session.add_all([other_admin, other_patient_user])
+    db_session.flush()
+    other_household = Household(
+        created_by_user_id=other_admin.user_id,
+        household_name="Other Household",
+    )
+    db_session.add(other_household)
+    db_session.flush()
+    other_patient = ElderlyPatient(
+        user_id=other_patient_user.user_id,
+        household_id=other_household.household_id,
+        birthdate=datetime(1950, 1, 1).date(),
+        sex=Sex.OTHER,
+    )
+    db_session.add(other_patient)
+    db_session.flush()
+    other_alert = make_alert(db_session, other_patient)
+    db_session.commit()
+
+    owner_headers = jwt_headers(owner, owned_household.household_id)
+    response = request(api_app, "GET", "/api/v1/alerts", headers=owner_headers)
+    assert response.status_code == 200
+    assert {item["alert_id"] for item in response.json()["items"]} == {
+        str(alert.alert_id)
+    }
+    assert request(
+        api_app,
+        "GET",
+        f"/api/v1/alerts/{other_alert.alert_id}",
+        headers=owner_headers,
+    ).status_code == 404
 
 
 def make_alert(db, patient, **changes):
@@ -381,23 +509,40 @@ def test_action_history_empty_ordered_and_missing(
     ).status_code == 404
 
 
-def test_temporary_actor_header_validation(api_app, alert):
+def test_bearer_token_validation_and_legacy_header_is_not_authority(
+    api_app, alert, actor
+):
     path = f"/api/v1/alerts/{alert.alert_id}/acknowledge"
-    assert request(api_app, "POST", path, json={}).status_code == 422
+    assert request(
+        api_app, "GET", "/api/v1/alerts", headers={}
+    ).status_code == 401
+    assert request(api_app, "POST", path, headers={}, json={}).status_code == 401
+    assert request(
+        api_app,
+        "GET",
+        "/api/v1/alerts",
+        headers={"Authorization": "Bearer not-a-token"},
+    ).status_code == 401
+    expired, _ = create_access_token(
+        user_id=actor.user_id,
+        household_id=actor._test_household_id,
+        secret=JWT_SECRET,
+        expires_minutes=1,
+        now=datetime.now(timezone.utc) - timedelta(minutes=2),
+    )
+    assert request(
+        api_app,
+        "GET",
+        "/api/v1/alerts",
+        headers={"Authorization": f"Bearer {expired}"},
+    ).status_code == 401
     assert request(
         api_app,
         "POST",
         path,
-        headers={"X-Alera-Actor-Id": "not-a-uuid"},
+        headers={"X-Alera-Actor-Id": str(actor.user_id)},
         json={},
-    ).status_code == 422
-    assert request(
-        api_app,
-        "POST",
-        path,
-        headers={"X-Alera-Actor-Id": str(uuid4())},
-        json={},
-    ).status_code == 404
+    ).status_code == 401
 
 
 def test_action_on_missing_alert_returns_404(api_app, actor):
@@ -695,6 +840,18 @@ def test_competing_terminal_transitions_only_one_succeeds(
     first_actor = User(full_name="Resolver", role=UserRole.CAREGIVER)
     second_actor = User(full_name="Reviewer", role=UserRole.CAREGIVER)
     db_session.add_all([first_actor, second_actor])
+    db_session.flush()
+    household = db_session.get(Household, patient.household_id)
+    db_session.add_all(
+        [
+            CaregiverPatientAssignment(
+                caregiver_user_id=worker_actor.user_id,
+                patient_id=patient.patient_id,
+                assigned_by_user_id=household.created_by_user_id,
+            )
+            for worker_actor in (first_actor, second_actor)
+        ]
+    )
     db_session.commit()
     barrier = Barrier(2)
     factory = sessionmaker(bind=integration_engine, expire_on_commit=False)

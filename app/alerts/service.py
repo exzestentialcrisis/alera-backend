@@ -5,6 +5,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.alert_actions.model import AlertAction, AlertActionType
+from app.alerts.access import accessible_patient_ids
 from app.alerts.display import display_mapping
 from app.alerts.errors import AlertNotFoundError, AlertTransitionConflictError
 from app.alerts.model import Alert, AlertStatus
@@ -249,6 +250,7 @@ def list_alerts(
     condition_key: ConditionKey | None,
     limit: int,
     offset: int,
+    actor: User | None = None,
 ) -> tuple[
     list[
         tuple[
@@ -262,6 +264,8 @@ def list_alerts(
     int,
 ]:
     filters = []
+    if actor is not None:
+        filters.append(Alert.patient_id.in_(accessible_patient_ids(actor)))
     if patient_id is not None:
         filters.append(Alert.patient_id == patient_id)
     if statuses:
@@ -361,6 +365,7 @@ def list_alerts(
 def get_alert_detail(
     db: Session,
     alert_id: UUID,
+    actor: User,
 ) -> tuple[
     Alert,
     EventEvaluation | None,
@@ -369,7 +374,12 @@ def get_alert_detail(
     ElderlyPatient | None,
     User | None,
 ]:
-    alert = db.get(Alert, alert_id)
+    alert = db.scalar(
+        select(Alert).where(
+            Alert.alert_id == alert_id,
+            Alert.patient_id.in_(accessible_patient_ids(actor)),
+        )
+    )
     if alert is None:
         raise AlertNotFoundError("Alert not found.")
 
@@ -401,8 +411,15 @@ def get_alert_detail(
     return alert, evaluation, event, latest_action, patient, user
 
 
-def list_alert_actions(db: Session, alert_id: UUID) -> list[AlertAction]:
-    if db.get(Alert, alert_id) is None:
+def list_alert_actions(
+    db: Session, alert_id: UUID, actor: User
+) -> list[AlertAction]:
+    if db.scalar(
+        select(Alert.alert_id).where(
+            Alert.alert_id == alert_id,
+            Alert.patient_id.in_(accessible_patient_ids(actor)),
+        )
+    ) is None:
         raise AlertNotFoundError("Alert not found.")
     return list(
         db.scalars(
@@ -416,10 +433,13 @@ def list_alert_actions(db: Session, alert_id: UUID) -> list[AlertAction]:
     )
 
 
-def _lock_alert(db: Session, alert_id: UUID) -> Alert:
+def _lock_alert(db: Session, alert_id: UUID, actor: User) -> Alert:
     alert = db.scalar(
         select(Alert)
-        .where(Alert.alert_id == alert_id)
+        .where(
+            Alert.alert_id == alert_id,
+            Alert.patient_id.in_(accessible_patient_ids(actor)),
+        )
         .with_for_update()
     )
     if alert is None:
@@ -463,7 +483,7 @@ def acknowledge_alert(
     actor: User,
     note: str | None,
 ) -> tuple[Alert, AlertAction | None, bool]:
-    alert = _lock_alert(db, alert_id)
+    alert = _lock_alert(db, alert_id, actor)
     _reject_archived(alert)
     if alert.status == AlertStatus.ACKNOWLEDGED:
         return alert, None, True
@@ -493,7 +513,7 @@ def resolve_alert(
     actor: User,
     note: str | None,
 ) -> tuple[Alert, AlertAction | None, bool]:
-    alert = _lock_alert(db, alert_id)
+    alert = _lock_alert(db, alert_id, actor)
     _reject_archived(alert)
     if alert.status == AlertStatus.RESOLVED:
         return alert, None, True
@@ -524,7 +544,7 @@ def mark_false_alarm(
     actor: User,
     reason: str,
 ) -> tuple[Alert, AlertAction | None, bool]:
-    alert = _lock_alert(db, alert_id)
+    alert = _lock_alert(db, alert_id, actor)
     _reject_archived(alert)
     if alert.status == AlertStatus.FALSE_ALARM:
         return alert, None, True
@@ -555,7 +575,7 @@ def add_alert_note(
     actor: User,
     note: str,
 ) -> tuple[Alert, AlertAction, bool]:
-    alert = _lock_alert(db, alert_id)
+    alert = _lock_alert(db, alert_id, actor)
     _reject_archived(alert)
     action = _add_action(
         db,
@@ -576,7 +596,7 @@ def log_alert_intervention(
     intervention_type: str,
     note: str,
 ) -> tuple[Alert, AlertAction, bool]:
-    alert = _lock_alert(db, alert_id)
+    alert = _lock_alert(db, alert_id, actor)
     _reject_archived(alert)
     action = _add_action(
         db,
