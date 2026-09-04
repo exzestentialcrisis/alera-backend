@@ -16,6 +16,27 @@ The migration that adds `HR_NORMAL` and `SPO2_NORMAL` is partially irreversible:
 its downgrade retains those PostgreSQL enum values because removing enum members is
 unsafe. Migration tests verify that documented behavior.
 
+## Caregiver authentication and demo seed
+
+Caregivers and care admins authenticate within a household using
+`POST /api/v1/auth/caregiver/login`. Configure `ALERA_JWT_SECRET` with a long,
+random secret and set `ALERA_JWT_ACCESS_TOKEN_MINUTES` to the desired positive
+token lifetime.
+
+To create or refresh the developer demo caregiver and ensure its active patient
+assignment exists, configure the three demo variables and run:
+
+```bash
+ALERA_DEMO_CAREGIVER_EMAIL=caregiver@example.com \
+ALERA_DEMO_CAREGIVER_PASSWORD='replace-with-demo-password' \
+ALERA_DEMO_PATIENT_ID='replace-with-demo-patient-uuid' \
+python -m app.auth.seed_demo_caregiver
+```
+
+The command is idempotent and prints only the caregiver email and resolved
+household name/code. It obtains database connectivity from the standard
+`DATABASE_URL` setting.
+
 ## Phase 5A alert foundation
 
 Alert records are caregiver-facing cases. An alert's status describes its

@@ -22,6 +22,7 @@ from app.alerts.schema import (
 from app.alerts.service import (
     acknowledge_alert,
     add_alert_note,
+    alert_display_payload,
     get_alert_detail,
     list_alert_actions,
     list_alerts,
@@ -94,7 +95,10 @@ async def get_alerts(
         offset=offset,
     )
     return {
-        "items": items,
+        "items": [
+            alert_display_payload(alert, evaluation, event, patient, user)
+            for alert, evaluation, event, patient, user in items
+        ],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -104,12 +108,15 @@ async def get_alerts(
 @router.get("/{alert_id}", response_model=AlertDetail)
 async def get_alert(alert_id: UUID, db: Session = Depends(get_db)):
     try:
-        alert, evaluation, event, latest_action = get_alert_detail(db, alert_id)
+        alert, evaluation, event, latest_action, patient, user = get_alert_detail(
+            db,
+            alert_id,
+        )
     except AlertNotFoundError as exc:
         _raise_http_error(exc)
         raise AssertionError("unreachable")
     return {
-        **AlertRead.model_validate(alert).model_dump(),
+        **alert_display_payload(alert, evaluation, event, patient, user),
         "triggering_event": event,
         "triggering_evaluation": evaluation,
         "latest_action": latest_action,

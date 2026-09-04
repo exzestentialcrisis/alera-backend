@@ -39,6 +39,34 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
 
     engine = create_engine(temporary_url)
     try:
+        migrate(
+            temporary_url.render_as_string(hide_password=False),
+            "upgrade",
+            "d7b2a1f04c6e",
+        )
+        with engine.begin() as connection:
+            admin_ids = [uuid4(), uuid4()]
+            for index, admin_id in enumerate(admin_ids):
+                connection.execute(
+                    text(
+                        "INSERT INTO users (user_id, full_name, role, account_status, "
+                        "created_at, updated_at) VALUES (:id, :name, 'CARE_ADMIN', "
+                        "'ACTIVE', now(), now())"
+                    ),
+                    {"id": admin_id, "name": f"Migration Admin {index}"},
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO households (household_id, created_by_user_id, "
+                        "household_name, household_status, created_at, updated_at) "
+                        "VALUES (:id, :admin_id, :name, 'ACTIVE', now(), now())"
+                    ),
+                    {
+                        "id": uuid4(),
+                        "admin_id": admin_id,
+                        "name": f"Existing Household {index}",
+                    },
+                )
         migrate(temporary_url.render_as_string(hide_password=False), "upgrade", "head")
         inspector = inspect(engine)
         assert {
@@ -50,7 +78,19 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "condition_trackers",
             "alerts",
             "alert_actions",
+            "caregiver_patient_assignments",
+            "patient_access_codes",
         }.issubset(inspector.get_table_names())
+
+        with engine.connect() as connection:
+            household_codes = connection.execute(
+                text("SELECT household_code FROM households")
+            ).scalars().all()
+        assert len(household_codes) == 2
+        assert len(set(household_codes)) == 2
+        assert all(
+            code and len(code) == 9 and code[4] == "-" for code in household_codes
+        )
 
         def foreign_key_exists(table, columns, referred_table, referred_columns):
             return any(

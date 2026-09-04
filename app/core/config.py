@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     database_url: str | None = None
     sql_echo: bool = False
 
+    alera_jwt_secret: str | None = None
+    alera_jwt_access_token_minutes: int = 60
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

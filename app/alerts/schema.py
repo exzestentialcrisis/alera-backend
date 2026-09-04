@@ -39,6 +39,14 @@ class AlertRead(BaseModel):
     resolved_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    patient_display_name: str | None = None
+    metric_type: MetricType | None = None
+    title: str | None = None
+    reading_value: Decimal | None = None
+    reading_unit: str | None = None
+    threshold_value: Decimal | None = None
+    threshold_unit: str | None = None
+    evaluation_reason: str | None = None
 
 
 class AlertActionRead(BaseModel):

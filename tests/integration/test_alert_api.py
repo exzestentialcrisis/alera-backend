@@ -1,6 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from threading import Barrier
 from uuid import uuid4
 
@@ -16,8 +17,13 @@ from app.alerts.service import mark_false_alarm, resolve_alert
 from app.condition_trackers.model import ConditionTracker
 from app.core.config import Settings
 from app.db.database import get_db
-from app.event_evaluations.model import ConditionKey, EvaluationSeverity
-from app.health_events.model import MetricType, ValidationStatus
+from app.event_evaluations.model import (
+    ConditionKey,
+    EvaluationSeverity,
+    EventEvaluation,
+    MonitoringState,
+)
+from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 from app.health_events.schema import HealthEventCreate
 from app.health_events.service import create_health_event
 from app.main import create_app
@@ -93,11 +99,132 @@ def make_alert(db, patient, **changes):
     return item
 
 
+def add_trigger(db, alert, *, metric_type, reading, unit, threshold, reason):
+    event = HealthEvent(
+        patient_id=alert.patient_id,
+        metric_type=metric_type,
+        numeric_value=reading,
+        metric_unit=unit,
+        recorded_at=alert.confirmed_at,
+        validation_status=ValidationStatus.VALID_REALTIME,
+        raw_payload={},
+    )
+    db.add(event)
+    db.flush()
+    evaluation = EventEvaluation(
+        event_id=event.event_id,
+        alert_id=alert.alert_id,
+        condition_key=alert.condition_key,
+        threshold_value_used=threshold,
+        threshold_met=True,
+        persistence_met=True,
+        previous_state=MonitoringState.ELEVATED,
+        new_state=MonitoringState.WARNING,
+        severity=alert.severity,
+        evaluation_reason=reason,
+        evaluated_at=alert.confirmed_at,
+    )
+    db.add(evaluation)
+    return event, evaluation
+
+
 def test_get_alerts_empty_result(api_app):
     response = request(api_app, "GET", "/api/v1/alerts")
 
     assert response.status_code == 200
     assert response.json() == {"items": [], "total": 0, "limit": 20, "offset": 0}
+
+
+def test_get_alerts_includes_hr_and_spo2_display_data(
+    api_app,
+    db_session,
+    patient,
+):
+    patient.nickname = "Nana"
+    hr_alert = make_alert(
+        db_session,
+        patient,
+        condition_key=ConditionKey.HR_HIGH,
+        confirmed_at=NOW + timedelta(minutes=2),
+    )
+    add_trigger(
+        db_session,
+        hr_alert,
+        metric_type=MetricType.HEART_RATE,
+        reading=Decimal("121"),
+        unit="beats/minute",
+        threshold=Decimal("100"),
+        reason="Heart rate exceeded the configured maximum.",
+    )
+    spo2_alert = make_alert(
+        db_session,
+        patient,
+        condition_key=ConditionKey.SPO2_LOW,
+        severity=EvaluationSeverity.CRITICAL,
+        confirmed_at=NOW + timedelta(minutes=1),
+    )
+    add_trigger(
+        db_session,
+        spo2_alert,
+        metric_type=MetricType.SPO2,
+        reading=Decimal("88"),
+        unit="percent",
+        threshold=Decimal("95"),
+        reason="SpO2 was below the configured minimum.",
+    )
+    db_session.commit()
+
+    response = request(api_app, "GET", "/api/v1/alerts")
+
+    assert response.status_code == 200
+    items = {item["condition_key"]: item for item in response.json()["items"]}
+    expected_hr = {
+        "patient_display_name": "Nana",
+        "condition_key": "HR_HIGH",
+        "metric_type": "HEART_RATE",
+        "title": "High Heart Rate",
+        "reading_value": "121.00",
+        "reading_unit": "BPM",
+        "threshold_value": "100.00",
+        "threshold_unit": "BPM",
+        "evaluation_reason": "Heart rate exceeded the configured maximum.",
+    }
+    assert {key: items["HR_HIGH"][key] for key in expected_hr} == expected_hr
+    assert items["SPO2_LOW"]["metric_type"] == "SPO2"
+    assert items["SPO2_LOW"]["title"] == "Low SpO₂"
+    assert items["SPO2_LOW"]["reading_value"] == "88.00"
+    assert items["SPO2_LOW"]["reading_unit"] == "%"
+    assert items["SPO2_LOW"]["threshold_value"] == "95.00"
+    assert items["SPO2_LOW"]["threshold_unit"] == "%"
+    assert items["SPO2_LOW"]["evaluation_reason"] == (
+        "SpO2 was below the configured minimum."
+    )
+    detail = request(
+        api_app,
+        "GET",
+        f"/api/v1/alerts/{hr_alert.alert_id}",
+    ).json()
+    for field in expected_hr:
+        assert detail[field] == items["HR_HIGH"][field]
+
+
+def test_alerts_without_triggering_data_serialize_nulls(
+    api_app,
+    db_session,
+    alert,
+):
+    list_response = request(api_app, "GET", "/api/v1/alerts")
+    detail_response = request(api_app, "GET", f"/api/v1/alerts/{alert.alert_id}")
+
+    assert list_response.status_code == 200
+    assert detail_response.status_code == 200
+    for body in (list_response.json()["items"][0], detail_response.json()):
+        assert body["patient_display_name"] == "Test Patient"
+        assert body["reading_value"] is None
+        assert body["threshold_value"] is None
+        assert body["evaluation_reason"] is None
+    assert detail_response.json()["triggering_event"] is None
+    assert detail_response.json()["triggering_evaluation"] is None
 
 
 def test_get_alerts_filters_paginates_and_orders(

@@ -5,6 +5,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.alert_actions.model import AlertAction, AlertActionType
+from app.alerts.display import display_mapping
 from app.alerts.errors import AlertNotFoundError, AlertTransitionConflictError
 from app.alerts.model import Alert, AlertStatus
 from app.condition_trackers.service import ConditionTrackerUpdateResult
@@ -15,6 +16,7 @@ from app.event_evaluations.model import (
     EventEvaluation,
 )
 from app.health_events.model import HealthEvent, ValidationStatus
+from app.patients.model import ElderlyPatient
 from app.users.model import User
 
 
@@ -25,6 +27,40 @@ NORMAL_CONDITIONS = {
 HR_WARNING_CONDITIONS = {ConditionKey.HR_HIGH, ConditionKey.HR_LOW}
 HR_WARNING_PERSISTENCE = timedelta(minutes=5)
 SPO2_WARNING_MEASUREMENT_COUNT = 2
+
+
+def alert_display_payload(
+    alert: Alert,
+    evaluation: EventEvaluation | None = None,
+    event: HealthEvent | None = None,
+    patient: ElderlyPatient | None = None,
+    user: User | None = None,
+) -> dict:
+    mapping = display_mapping(alert.condition_key)
+    return {
+        "alert_id": alert.alert_id,
+        "patient_id": alert.patient_id,
+        "condition_key": alert.condition_key,
+        "severity": alert.severity,
+        "status": alert.status,
+        "detected_at": alert.detected_at,
+        "confirmed_at": alert.confirmed_at,
+        "resolved_at": alert.resolved_at,
+        "created_at": alert.created_at,
+        "updated_at": alert.updated_at,
+        "patient_display_name": (
+            (patient.nickname or user.full_name)
+            if patient is not None and user is not None
+            else (patient.nickname if patient is not None else None)
+        ),
+        "metric_type": mapping.metric_type if mapping else None,
+        "title": mapping.title if mapping else None,
+        "reading_value": event.numeric_value if event else None,
+        "reading_unit": mapping.unit if mapping else None,
+        "threshold_value": evaluation.threshold_value_used if evaluation else None,
+        "threshold_unit": mapping.unit if mapping else None,
+        "evaluation_reason": evaluation.evaluation_reason if evaluation else None,
+    }
 
 
 def _find_unresolved_alert(
@@ -213,7 +249,18 @@ def list_alerts(
     condition_key: ConditionKey | None,
     limit: int,
     offset: int,
-) -> tuple[list[Alert], int]:
+) -> tuple[
+    list[
+        tuple[
+            Alert,
+            EventEvaluation | None,
+            HealthEvent | None,
+            ElderlyPatient | None,
+            User | None,
+        ]
+    ],
+    int,
+]:
     filters = []
     if patient_id is not None:
         filters.append(Alert.patient_id == patient_id)
@@ -257,7 +304,58 @@ def list_alerts(
         .limit(limit)
         .offset(offset)
     ).all()
-    return list(items), total
+    alerts = list(items)
+    if not alerts:
+        return [], total
+    alert_ids = [alert.alert_id for alert in alerts]
+    evaluations = db.scalars(
+        select(EventEvaluation)
+        .where(EventEvaluation.alert_id.in_(alert_ids))
+        .order_by(EventEvaluation.evaluated_at, EventEvaluation.evaluation_id)
+    ).all()
+    first_evaluation: dict[UUID, EventEvaluation] = {}
+    for evaluation in evaluations:
+        if evaluation.alert_id is not None:
+            first_evaluation.setdefault(evaluation.alert_id, evaluation)
+    event_ids = [evaluation.event_id for evaluation in first_evaluation.values()]
+    events = (
+        {
+            event.event_id: event
+            for event in db.scalars(
+                select(HealthEvent).where(HealthEvent.event_id.in_(event_ids))
+            ).all()
+        }
+        if event_ids
+        else {}
+    )
+    patient_ids = [alert.patient_id for alert in alerts]
+    patients = {
+        patient.patient_id: patient
+        for patient in db.scalars(
+            select(ElderlyPatient).where(ElderlyPatient.patient_id.in_(patient_ids))
+        ).all()
+    }
+    user_ids = [patient.user_id for patient in patients.values()]
+    users = (
+        {
+            user.user_id: user
+            for user in db.scalars(
+                select(User).where(User.user_id.in_(user_ids))
+            ).all()
+        }
+        if user_ids
+        else {}
+    )
+    return [
+        (
+            alert,
+            (evaluation := first_evaluation.get(alert.alert_id)),
+            events.get(evaluation.event_id) if evaluation else None,
+            (patient := patients.get(alert.patient_id)),
+            users.get(patient.user_id) if patient else None,
+        )
+        for alert in alerts
+    ], total
 
 
 def get_alert_detail(
@@ -268,6 +366,8 @@ def get_alert_detail(
     EventEvaluation | None,
     HealthEvent | None,
     AlertAction | None,
+    ElderlyPatient | None,
+    User | None,
 ]:
     alert = db.get(Alert, alert_id)
     if alert is None:
@@ -287,6 +387,8 @@ def get_alert_detail(
         if evaluation is not None
         else None
     )
+    patient = db.get(ElderlyPatient, alert.patient_id)
+    user = db.get(User, patient.user_id) if patient else None
     latest_action = db.scalar(
         select(AlertAction)
         .where(AlertAction.alert_id == alert_id)
@@ -296,7 +398,7 @@ def get_alert_detail(
         )
         .limit(1)
     )
-    return alert, evaluation, event, latest_action
+    return alert, evaluation, event, latest_action, patient, user
 
 
 def list_alert_actions(db: Session, alert_id: UUID) -> list[AlertAction]:

@@ -2,12 +2,22 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    event,
+    inspect,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.time import utc_now
 from app.db.base import Base
+from app.households.codes import generate_household_code
 
 
 class HouseholdStatus(str, enum.Enum):
@@ -18,6 +28,9 @@ class HouseholdStatus(str, enum.Enum):
 
 class Household(Base):
     __tablename__ = "households"
+    __table_args__ = (
+        UniqueConstraint("household_code", name="uq_households_household_code"),
+    )
 
     household_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -34,6 +47,12 @@ class Household(Base):
     household_name: Mapped[str] = mapped_column(
         String(150),
         nullable=False,
+    )
+
+    household_code: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        default=generate_household_code,
     )
 
     address: Mapped[str | None] = mapped_column(
@@ -74,3 +93,9 @@ class Household(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+
+
+@event.listens_for(Household, "before_update")
+def _prevent_household_code_update(_mapper, _connection, household: Household) -> None:
+    if inspect(household).attrs.household_code.history.has_changes():
+        raise ValueError("household_code is immutable.")
