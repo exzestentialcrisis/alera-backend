@@ -6,6 +6,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from app.core.config import Settings
+from app.auth.security import create_access_token
+from uuid import uuid4
 from app.db.database import get_db
 from app.household_access.model import (
     CaregiverPatientAssignment,
@@ -22,7 +24,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def api_app(db_session):
-    app = create_app(Settings(environment="testing", database_url=None))
+    app = create_app(Settings(environment="testing", database_url=None, alera_jwt_secret="test-secret"))
 
     async def override_db():
         yield db_session
@@ -41,8 +43,9 @@ def request(app, method, path, **kwargs):
     return asyncio.run(send())
 
 
-def headers(user):
-    return {"X-Alera-Actor-Id": str(user.user_id)}
+def headers(user, *, bearer=False):
+    token, _ = create_access_token(user_id=user.user_id, household_id=getattr(user, "test_household_id", uuid4()), secret="test-secret", expires_minutes=30)
+    return {"Authorization": f"Bearer {token}"} if bearer else {"X-Alera-Actor-Id": str(user.user_id)}
 
 
 def build_household(db, name):
@@ -61,6 +64,7 @@ def build_household(db, name):
     )
     db.add(patient)
     db.flush()
+    patient_user.test_household_id = household.household_id
     return admin, household, patient, patient_user
 
 
@@ -146,9 +150,9 @@ def test_access_code_permissions_hashing_replacement_and_revocation(
     assert assign(api_app, admin, household, caregiver, patient).status_code == 201
     path = f"/api/v1/patients/{patient.patient_id}/access-codes"
 
-    assert request(api_app, "POST", path, headers=headers(unassigned), json={}).status_code == 403
-    assert request(api_app, "POST", path, headers=headers(patient_user), json={}).status_code == 403
-    first = request(api_app, "POST", path, headers=headers(admin), json={})
+    assert request(api_app, "POST", path, headers=headers(unassigned, bearer=True), json={}).status_code == 403
+    assert request(api_app, "POST", path, headers=headers(patient_user, bearer=True), json={}).status_code == 403
+    first = request(api_app, "POST", path, headers=headers(admin, bearer=True), json={})
     assert first.status_code == 201
     plaintext = first.json()["access_code"]
     stored = db_session.get(PatientAccessCode, first.json()["access_code_id"])
@@ -156,7 +160,7 @@ def test_access_code_permissions_hashing_replacement_and_revocation(
     assert verify_access_code(plaintext, stored.code_hash)
     assert not verify_access_code("AAAA-AAAA-AAAA-AAAA", stored.code_hash)
 
-    replacement = request(api_app, "POST", path, headers=headers(caregiver), json={})
+    replacement = request(api_app, "POST", path, headers=headers(caregiver, bearer=True), json={})
     assert replacement.status_code == 201
     db_session.refresh(stored)
     assert stored.revoked_at is not None
@@ -165,7 +169,7 @@ def test_access_code_permissions_hashing_replacement_and_revocation(
         api_app,
         "POST",
         f"{path}/{replacement_id}/revoke",
-        headers=headers(caregiver),
+        headers=headers(caregiver, bearer=True),
     )
     assert revoked.status_code == 200
     assert revoked.json()["status"] == "REVOKED"
@@ -198,8 +202,33 @@ def test_archived_patient_and_disabled_actor_cannot_manage_codes(api_app, db_ses
     patient.archived_at = datetime.now(timezone.utc)
     db_session.commit()
     path = f"/api/v1/patients/{patient.patient_id}/access-codes"
-    assert request(api_app, "POST", path, headers=headers(admin), json={}).status_code == 403
+    assert request(api_app, "POST", path, headers=headers(admin, bearer=True), json={}).status_code == 403
     patient.archived_at = None
     admin.account_status = AccountStatus.ARCHIVED
     db_session.commit()
-    assert request(api_app, "POST", path, headers=headers(admin), json={}).status_code == 403
+    assert request(api_app, "POST", path, headers=headers(admin, bearer=True), json={}).status_code == 401
+
+
+def test_code_bearer_permissions_for_issue_and_revoke(api_app, db_session):
+    admin, household, patient, patient_user = build_household(db_session, "Home")
+    outsider, _, _, _ = build_household(db_session, "Other")
+    caregiver = User(full_name="Caregiver", role=UserRole.CAREGIVER)
+    db_session.add(caregiver)
+    db_session.commit()
+    path = f"/api/v1/patients/{patient.patient_id}/access-codes"
+    assert request(api_app, "POST", path, headers=headers(admin), json={}).status_code == 401
+    issued = request(api_app, "POST", path, headers=headers(admin, bearer=True), json={})
+    revoke = f"{path}/{issued.json()['access_code_id']}/revoke"
+    for actor in (outsider, caregiver, patient_user):
+        assert request(api_app, "POST", path, headers=headers(actor, bearer=True), json={}).status_code == 403
+        assert request(api_app, "POST", revoke, headers=headers(actor, bearer=True)).status_code == 403
+    assert assign(api_app, admin, household, caregiver, patient).status_code == 201
+    assert request(api_app, "POST", revoke, headers=headers(caregiver, bearer=True)).status_code == 200
+    assignment = db_session.scalar(select(CaregiverPatientAssignment).where(CaregiverPatientAssignment.caregiver_user_id == caregiver.user_id))
+    assignment.unassigned_at = datetime.now(timezone.utc)
+    db_session.commit()
+    assert request(api_app, "POST", revoke, headers=headers(caregiver, bearer=True)).status_code == 403
+    household.household_status = HouseholdStatus.INACTIVE
+    db_session.commit()
+    assert request(api_app, "POST", path, headers=headers(admin, bearer=True), json={}).status_code == 403
+    assert request(api_app, "POST", revoke, headers=headers(admin, bearer=True)).status_code == 403

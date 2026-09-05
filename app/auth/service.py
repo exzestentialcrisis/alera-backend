@@ -1,10 +1,13 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.auth.errors import AuthenticationError
-from app.auth.schema import CaregiverLoginRequest
+from app.auth.schema import CaregiverLoginRequest, PatientAccessRequest
 from app.auth.security import create_access_token, verify_password
 from app.core.config import Settings
+from app.core.time import utc_now
+from app.household_access.model import PatientAccessCode
+from app.household_access.security import verify_access_code
 from app.household_access.model import CaregiverPatientAssignment
 from app.households.model import Household, HouseholdStatus
 from app.patients.model import ElderlyPatient
@@ -75,3 +78,58 @@ def authenticate_caregiver(
             "household_code": household.household_code,
         },
     }
+
+
+def authenticate_patient(
+    db: Session, credentials: PatientAccessRequest, settings: Settings
+) -> dict:
+
+    failure = AuthenticationError("Invalid household code or access code.")
+    now = utc_now()
+    candidates = db.execute(
+        select(PatientAccessCode, ElderlyPatient, User, Household)
+        .join(ElderlyPatient, ElderlyPatient.patient_id == PatientAccessCode.patient_id)
+        .join(User, User.user_id == ElderlyPatient.user_id)
+        .join(Household, Household.household_id == ElderlyPatient.household_id)
+        .where(
+            func.upper(Household.household_code) == credentials.household_code.strip().upper(),
+            Household.household_status == HouseholdStatus.ACTIVE,
+            Household.archived_at.is_(None),
+            ElderlyPatient.archived_at.is_(None),
+            User.account_status == AccountStatus.ACTIVE,
+            User.role == UserRole.ELDERLY_PATIENT,
+            PatientAccessCode.used_at.is_(None),
+            PatientAccessCode.revoked_at.is_(None),
+            PatientAccessCode.expires_at > now,
+        )
+    )
+    for code, patient, user, household in candidates:
+        if not verify_access_code(credentials.access_code.strip().upper(), code.code_hash):
+            continue
+        # Conditional UPDATE is rechecked after concurrent writers commit.
+        consumed = db.execute(
+            update(PatientAccessCode).where(
+                PatientAccessCode.access_code_id == code.access_code_id,
+                PatientAccessCode.used_at.is_(None),
+                PatientAccessCode.revoked_at.is_(None),
+                PatientAccessCode.expires_at > utc_now(),
+            ).values(used_at=utc_now()).returning(PatientAccessCode.access_code_id)
+        ).scalar_one_or_none()
+        if consumed is None:
+            raise failure
+        token, expires_at = create_access_token(
+            user_id=user.user_id,
+            household_id=household.household_id,
+            secret=settings.alera_jwt_secret or "",
+            expires_minutes=settings.alera_jwt_access_token_minutes,
+        )
+        return {
+            "access_token": token, "token_type": "bearer", "expires_at": expires_at,
+            "actor": {
+                "user_id": user.user_id, "full_name": user.full_name, "role": user.role,
+                "household_id": household.household_id,
+                "household_name": household.household_name,
+                "household_code": household.household_code,
+            },
+        }
+    raise failure

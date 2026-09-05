@@ -44,6 +44,8 @@ def _patient_for_code_management(
     db: Session, patient_id: UUID, actor: User
 ) -> ElderlyPatient:
     _require_active_actor(actor)
+    if actor.account_status is not AccountStatus.ACTIVE or actor.role is UserRole.ELDERLY_PATIENT:
+        raise AccessForbiddenError("Actor is not permitted to manage this patient.")
     patient = db.get(ElderlyPatient, patient_id)
     if patient is None:
         raise AccessNotFoundError("Patient not found.")
@@ -51,7 +53,7 @@ def _patient_for_code_management(
     archived = (
         patient.archived_at is not None
         or household is None
-        or household.household_status is HouseholdStatus.ARCHIVED
+        or household.household_status is not HouseholdStatus.ACTIVE
         or household.archived_at is not None
     )
     permitted = False

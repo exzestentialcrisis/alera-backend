@@ -27,3 +27,8 @@ class CaregiverLoginResponse(BaseModel):
     token_type: Literal["bearer"] = "bearer"
     expires_at: datetime
     actor: ActorProfile
+
+
+class PatientAccessRequest(BaseModel):
+    household_code: str = Field(max_length=32)
+    access_code: str = Field(max_length=1024)

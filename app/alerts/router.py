@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import get_current_actor
+from app.auth.dependencies import get_current_caregiver
 from app.alerts.errors import AlertNotFoundError, AlertTransitionConflictError
 from app.alerts.model import AlertStatus
 from app.alerts.schema import (
@@ -83,7 +83,7 @@ async def get_alerts(
     condition_key: ConditionKey | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
-    actor: User = Depends(get_current_actor),
+    actor: User = Depends(get_current_caregiver),
     db: Session = Depends(get_db),
 ):
     items, total = list_alerts(
@@ -110,7 +110,7 @@ async def get_alerts(
 @router.get("/{alert_id}", response_model=AlertDetail)
 async def get_alert(
     alert_id: UUID,
-    actor: User = Depends(get_current_actor),
+    actor: User = Depends(get_current_caregiver),
     db: Session = Depends(get_db),
 ):
     try:
@@ -136,7 +136,7 @@ async def get_alert(
 )
 async def get_alert_actions(
     alert_id: UUID,
-    actor: User = Depends(get_current_actor),
+    actor: User = Depends(get_current_caregiver),
     db: Session = Depends(get_db),
 ):
     try:
@@ -153,7 +153,7 @@ async def get_alert_actions(
 async def acknowledge(
     alert_id: UUID,
     payload: OptionalNoteRequest,
-    actor: User = Depends(get_current_actor),
+    actor: User = Depends(get_current_caregiver),
     db: Session = Depends(get_db),
 ):
     return _run_action(
@@ -166,7 +166,7 @@ async def acknowledge(
 async def resolve(
     alert_id: UUID,
     payload: OptionalNoteRequest,
-    actor: User = Depends(get_current_actor),
+    actor: User = Depends(get_current_caregiver),
     db: Session = Depends(get_db),
 ):
     return _run_action(
@@ -182,7 +182,7 @@ async def resolve(
 async def false_alarm(
     alert_id: UUID,
     payload: FalseAlarmRequest,
-    actor: User = Depends(get_current_actor),
+    actor: User = Depends(get_current_caregiver),
     db: Session = Depends(get_db),
 ):
     return _run_action(
@@ -195,7 +195,7 @@ async def false_alarm(
 async def add_note(
     alert_id: UUID,
     payload: NoteRequest,
-    actor: User = Depends(get_current_actor),
+    actor: User = Depends(get_current_caregiver),
     db: Session = Depends(get_db),
 ):
     return _run_action(
@@ -211,7 +211,7 @@ async def add_note(
 async def add_intervention(
     alert_id: UUID,
     payload: InterventionRequest,
-    actor: User = Depends(get_current_actor),
+    actor: User = Depends(get_current_caregiver),
     db: Session = Depends(get_db),
 ):
     return _run_action(
