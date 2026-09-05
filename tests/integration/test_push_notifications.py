@@ -224,8 +224,8 @@ def test_only_active_assigned_devices_and_exact_payload(
         assert message == {
             "token": message["token"],
             "notification": {
-                "title": "Alera health alert",
-                "body": "A new alert needs your attention.",
+                "title": "Critical: High Heart Rate",
+                "body": "Test Patient • 151 BPM",
             },
             "data": {
                 "type": "ALERT",

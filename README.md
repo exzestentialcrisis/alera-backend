@@ -165,7 +165,10 @@ Only a new ACTIVE alert from the existing rule flow queues delivery. The outer
 transaction must commit before a separate session selects devices belonging to
 active caregivers/care admins with a current patient assignment. Alert reads,
 updates, reused alerts and rolled-back transactions do not trigger sends.
-The title is “Alera health alert”; the body is “A new alert needs your attention.”
+The title identifies severity and alert (for example, “Critical: High Heart Rate”);
+the body shows the patient display name and reading (for example,
+“Alera Test Patient • 154 BPM”). Missing display fields use the generic title
+“Alera health alert” or body “A new alert needs your attention.”
 Data contains only `type=ALERT`, `alert_id`, and `patient_id`.
 
 Delivery is synchronous, best effort after commit, with no durable queue or retry

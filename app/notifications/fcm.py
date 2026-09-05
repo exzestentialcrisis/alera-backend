@@ -7,6 +7,7 @@ import re
 import httpx
 
 from app.core.config import Settings
+from app.notifications.content import DEFAULT_BODY, DEFAULT_TITLE
 
 logger = logging.getLogger(__name__)
 SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
@@ -80,7 +81,10 @@ class FCMSender:
                 request.session.close()
         return self.credentials.token
 
-    def send(self, token: str, *, alert_id, patient_id) -> bool:
+    def send(
+        self, token: str, *, alert_id, patient_id,
+        title: str = DEFAULT_TITLE, body: str = DEFAULT_BODY,
+    ) -> bool:
         """Return True only for a definitively invalid device registration."""
         if not self.configured:
             return False
@@ -93,8 +97,8 @@ class FCMSender:
                     "message": {
                         "token": token,
                         "notification": {
-                            "title": "Alera health alert",
-                            "body": "A new alert needs your attention.",
+                            "title": title,
+                            "body": body,
                         },
                         "data": {
                             "type": "ALERT",
