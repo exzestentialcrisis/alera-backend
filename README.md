@@ -231,3 +231,45 @@ Mocked HTTP tests (no deployed calls):
 ```bash
 .venv/bin/pytest tests/unit/test_trigger_push_demo.py -q
 ```
+
+## Caregiver-created patients
+
+Authenticated caregivers and care admins can call `POST /api/v1/patients` with
+`Authorization: Bearer <access token>`. The household comes exclusively from
+the JWT. Current active household membership (caregiver assignment) or ownership
+(care admin) is rechecked. Caregivers receive an active assignment to the new
+patient; admin-created patients remain unassigned.
+
+Example JSON:
+
+```json
+{
+  "full_name": "New Patient",
+  "birthdate": "1950-01-02",
+  "sex": "FEMALE",
+  "address_or_room": "Room 2",
+  "baseline_heart_rate": 72,
+  "baseline_spo2": 98,
+  "monitoring_notes": "Caregiver notes"
+}
+```
+
+Only `full_name` is required. Optional fields also include `phone_number`
+(existing 11-character user-field limit), `emergency_contact_name`,
+`emergency_contact_phone`, `known_conditions`, and `medications`. Conditions,
+medications, and notes are strings. Sex accepts MALE, FEMALE, or OTHER. Baseline
+readings are optional profile values, not rule thresholds; existing threshold
+defaults remain unchanged. Unknown fields, including household or assignment
+overrides, are rejected.
+
+The 201 response returns the profile, patient/user/household IDs, account status,
+archive timestamp, creation timestamp, and `assignment` (the existing assignment
+response shape, or null). Creation is atomic and requires no patient email or
+password. It does not issue an access code. Use the existing explicit
+`POST /api/v1/patients/{patient_id}/access-codes` action afterward, then the
+existing patient access login flow.
+
+Deploy with `alembic upgrade head`. Migration `f3a9120bc651` preserves existing
+rows, allows unknown birthdate/sex, and adds nullable profile columns. Its
+downgrade refuses rows with missing demographics or populated new profile fields
+rather than inventing demographics or silently dropping profile data.

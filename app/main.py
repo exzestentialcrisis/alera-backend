@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.alerts.router import router as alert_router
 from app.auth.router import router as auth_router
 from app.core.config import Settings, get_settings
+from app.patients.router import router as patient_router
 from app.devices.router import router as devices_router
 from app.health_events.router import router as health_event_router
 from app.household_access.router import router as household_access_router
@@ -21,6 +22,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(household_access_router)
     application.include_router(auth_router)
     application.include_router(devices_router)
+    application.include_router(patient_router)
 
     @application.get("/health")
     async def health_check() -> dict[str, str]:
