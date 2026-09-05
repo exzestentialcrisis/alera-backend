@@ -80,6 +80,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "alert_actions",
             "caregiver_patient_assignments",
             "patient_access_codes",
+            "caregiver_push_devices",
         }.issubset(inspector.get_table_names())
 
         with engine.connect() as connection:
@@ -114,6 +115,14 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         )
         assert foreign_key_exists(
             "event_evaluations", ["alert_id"], "alerts", ["alert_id"]
+        )
+
+        assert foreign_key_exists(
+            "caregiver_push_devices", ["user_id"], "users", ["user_id"]
+        )
+        assert any(
+            item["column_names"] == ["fcm_token"]
+            for item in inspector.get_unique_constraints("caregiver_push_devices")
         )
 
         expected_indexes = {

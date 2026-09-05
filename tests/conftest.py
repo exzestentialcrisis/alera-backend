@@ -70,6 +70,7 @@ def integration_engine(test_database_url: str) -> Generator[Engine, None, None]:
 @pytest.fixture()
 def db_session(integration_engine: Engine) -> Generator[Session, None, None]:
     table_names = [
+        "caregiver_push_devices",
         "patient_access_codes",
         "caregiver_patient_assignments",
         "alert_actions",
@@ -131,3 +132,13 @@ def event_payload(patient: ElderlyPatient) -> dict:
         "recorded_at": datetime(2026, 7, 17, 5, tzinfo=timezone.utc),
         "validation_status": "VALID_REALTIME",
     }
+
+
+@pytest.fixture(autouse=True)
+def disable_real_push_delivery(monkeypatch):
+    # Tests explicitly inject mocked FCM transport/settings when exercising delivery.
+    monkeypatch.setenv("FCM_ENABLED", "false")
+    monkeypatch.delenv("FIREBASE_SERVICE_ACCOUNT_JSON", raising=False)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()

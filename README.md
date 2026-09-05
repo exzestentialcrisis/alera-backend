@@ -45,8 +45,8 @@ handled and does not by itself prove physiological recovery. Alert status does
 not control `ConditionTracker.active`.
 
 Alert creation and notification delivery remain separate concerns.
-Notification, aggregation, cooldown, and suppression behavior is deferred to
-later Phase 5 work.
+Optional post-commit push delivery is documented below. Aggregation, cooldown,
+and suppression behavior is deferred to later Phase 5 work.
 
 ## Phase 5 alert behavior
 
@@ -68,8 +68,7 @@ consecutive accepted Warning candidates qualify a Warning alert. Gaps up to and
 including five minutes preserve the consecutive occurrence; larger gaps restart
 the count. Duration alone never escalates an SpO₂ Warning to Critical.
 
-Raw sensor callbacks are not expected to be stored individually. Notification
-delivery remains deferred.
+Raw sensor callbacks are not expected to be stored individually.
 
 ## Caregiver Alert API MVP
 
@@ -134,3 +133,45 @@ patient submissions before the endpoint is treated as production-secure.
 `usual_spo2_max` is retained as a baseline/trend field. Current alert evaluation
 uses `usual_spo2_min`; the maximum is constrained for data integrity but does not
 change current SpO₂ classification behavior.
+
+
+## Caregiver push notifications (optional)
+
+Run `alembic upgrade head` before deploying the device endpoints. Authenticated
+caregivers/care admins can register Android devices with
+`POST /api/v1/devices/fcm-token` and JSON
+`{"token": "<FCM registration token>", "platform": "ANDROID"}`. Registration is
+idempotent and reassigns an existing token to the authenticated user. Refresh it
+on sign-in/token refresh; use `DELETE /api/v1/devices/fcm-token` with
+`{"token": "<FCM registration token>"}` before sign-out. Delete only affects the
+actor's registration. Both return `{"status": "ok"}`. Tokens accept 1–2048 ASCII
+letters, digits, underscores, colons, periods and hyphens; validation responses
+never echo input. SQL parameters are hidden even with `SQL_ECHO=true`.
+
+Set these environment variables on the Render backend service:
+
+- `FCM_ENABLED=true` (defaults to `false`; keep disabled in local/test environments).
+- `FIREBASE_PROJECT_ID`: the target Firebase project ID.
+- `FIREBASE_SERVICE_ACCOUNT_JSON`: the complete service-account JSON as a secret
+  environment value, never a committed file or a client-side setting.
+
+Enable the Firebase Cloud Messaging API (HTTP v1) in the target project and grant
+the service account permission to send messages (`cloudmessaging.messages.create`,
+e.g. Firebase Cloud Messaging API Admin). The sender uses Google's service-account
+OAuth flow with the `firebase.messaging` scope and bounded HTTP timeouts. See
+[Firebase HTTP v1 setup](https://firebase.google.com/docs/cloud-messaging/send/v1-api).
+
+Only a new ACTIVE alert from the existing rule flow queues delivery. The outer
+transaction must commit before a separate session selects devices belonging to
+active caregivers/care admins with a current patient assignment. Alert reads,
+updates, reused alerts and rolled-back transactions do not trigger sends.
+The title is “Alera health alert”; the body is “A new alert needs your attention.”
+Data contains only `type=ALERT`, `alert_id`, and `patient_id`.
+
+Delivery is synchronous, best effort after commit, with no durable queue or retry
+worker in this milestone. Requests can wait for delivery timeouts; a process crash
+after commit can lose a push. Disabled/missing/invalid configuration and delivery
+failures leave persisted alerts intact. Definitively unregistered/invalid FCM
+registrations are removed; generic HTTP 400 and transient errors retain them.
+Logs omit tokens, credentials, exception details and FCM response bodies.
+Tests mock OAuth/FCM transport and never use service-account credentials.

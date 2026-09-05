@@ -12,7 +12,9 @@ _session_factory: sessionmaker[Session] | None = None
 def create_db_engine(settings: Settings) -> Engine:
     if settings.database_url is None:
         raise RuntimeError("DATABASE_URL is required for database operations.")
-    return create_engine(settings.database_url, echo=settings.sql_echo)
+    return create_engine(
+        settings.database_url, echo=settings.sql_echo, hide_parameters=True
+    )
 
 
 def get_engine() -> Engine:

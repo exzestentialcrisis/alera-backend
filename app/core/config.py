@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +11,10 @@ class Settings(BaseSettings):
 
     database_url: str | None = None
     sql_echo: bool = False
+
+    fcm_enabled: bool = False
+    firebase_project_id: str | None = None
+    firebase_service_account_json: SecretStr | None = None
 
     alera_jwt_secret: str | None = None
     alera_jwt_access_token_minutes: int = 60

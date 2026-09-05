@@ -17,6 +17,7 @@ from app.event_evaluations.model import (
     EventEvaluation,
 )
 from app.health_events.model import HealthEvent, ValidationStatus
+from app.notifications.events import queue_alert_notification
 from app.patients.model import ElderlyPatient
 from app.users.model import User
 
@@ -114,6 +115,7 @@ def process_immediate_critical_alert(
         )
         db.add(alert)
         db.flush()
+        queue_alert_notification(db, alert)
     else:
         alert.severity = EvaluationSeverity.CRITICAL
         alert.updated_at = utc_now()
@@ -173,6 +175,7 @@ def process_persistent_hr_warning(
         )
         db.add(alert)
         db.flush()
+        queue_alert_notification(db, alert)
 
     # Do not downgrade Critical severity or change caregiver-handling status.
     evaluation.alert_id = alert.alert_id
@@ -234,6 +237,7 @@ def process_consecutive_spo2_warning(
         )
         db.add(alert)
         db.flush()
+        queue_alert_notification(db, alert)
 
     # Existing Critical severity and all caregiver-handling states are kept.
     evaluation.alert_id = alert.alert_id
