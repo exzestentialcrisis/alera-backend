@@ -175,3 +175,56 @@ failures leave persisted alerts intact. Definitively unregistered/invalid FCM
 registrations are removed; generic HTTP 400 and transient errors retain them.
 Logs omit tokens, credentials, exception details and FCM response bodies.
 Tests mock OAuth/FCM transport and never use service-account credentials.
+
+## Development-only deployed push demo
+
+`scripts/trigger_push_demo.py` uses HTTPS API calls only. It logs in to the fixed
+fixture household `33333333-3333-3333-3333-333333333333` (`4V8F-29HC`), requires
+exactly one accessible ACTIVE HR_HIGH alert for fixture patient
+`a076ecdb-ae38-4f84-b490-e714977027ee` (Alera Test Patient), resolves it through the
+alert API, and ingests a fresh current-UTC 154 BPM HEART_RATE event. Each run uses
+a unique event ID, separate from the seed IDs. It polls for a different ACTIVE
+HR_HIGH alert and verifies its triggering event. No database access, local
+Firebase credentials, or debug endpoint is used. `--confirm-demo` is mandatory;
+there are no patient or household overrides. Use only the development demo
+deployment and run one demo command at a time.
+
+Prerequisites: the explicit auth-development fixture and its demo alert seed
+already exist on that deployment; the demo caregiver has an active assignment
+to that patient; the phone is signed in as that caregiver, has notification
+permission, and has registered its current FCM token. Configure FCM on Render as
+above. Wait until any future-dated seed readings are in the past before running.
+
+From the repository root on Fedora, with the project `.venv` dependencies
+installed, paste this Bash command. Enter the HTTPS origin (without `/api/v1`)
+and credentials at the prompts; prompt input is not stored in shell history,
+and the password is hidden. The subshell clears the environment on exit and
+turns off shell tracing before reading credentials:
+
+```bash
+(
+  set +x
+  read -r -p 'Deployed demo HTTPS origin: ' ALERA_DEMO_BASE_URL
+  read -r -p 'Demo caregiver email: ' ALERA_DEMO_CAREGIVER_EMAIL
+  read -r -s -p 'Demo caregiver password: ' ALERA_DEMO_CAREGIVER_PASSWORD
+  printf '\n'
+  export ALERA_DEMO_BASE_URL ALERA_DEMO_CAREGIVER_EMAIL ALERA_DEMO_CAREGIVER_PASSWORD
+  .venv/bin/python -m scripts.trigger_push_demo --confirm-demo
+)
+```
+
+Success prints only the new alert ID, ACTIVE status, HR_HIGH condition, and a
+phone/Render-log reminder. Alert creation does not prove phone delivery: FCM
+runs inside Render after commit and is best effort. Check the phone and Render
+logs to complete the end-to-end check. Failures exit nonzero without printing
+response bodies or credentials. A timeout may occur after a mutation committed;
+inspect fixture state before retrying. If no ACTIVE fixture alert exists, the
+command fails without ingesting an event; restore the development fixture using
+the existing setup workflow. Re-running the idempotent seed alone does not
+reopen a resolved alert.
+
+Mocked HTTP tests (no deployed calls):
+
+```bash
+.venv/bin/pytest tests/unit/test_trigger_push_demo.py -q
+```

@@ -162,7 +162,7 @@ def transport(monkeypatch):
         _env_file=None,
         fcm_enabled=True,
         firebase_project_id="alera-test",
-        firebase_service_account_json="{}",
+        firebase_service_account_json='{"project_id":"alera-test","client_email":"synthetic","private_key":"synthetic"}',
     )
     monkeypatch.setattr(service, "get_settings", lambda: settings)
     monkeypatch.setattr(FCMSender, "_access_token", lambda self: "mock-oauth")

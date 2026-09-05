@@ -19,19 +19,41 @@ class FCMSender:
 
     @property
     def configured(self) -> bool:
+        # Report only the first failure, using constant messages without values.
         if not self.settings.fcm_enabled:
-            logger.debug("FCM delivery disabled.")
+            logger.info("FCM_ENABLED is false; delivery skipped.")
             return False
-        if (
-            not self.settings.firebase_project_id
-            or not self.settings.firebase_service_account_json
-        ):
-            logger.warning("FCM configuration missing; delivery skipped.")
+        if not self.settings.firebase_project_id or not self.settings.firebase_project_id.strip():
+            logger.warning("FIREBASE_PROJECT_ID is missing; delivery skipped.")
+            return False
+        secret = self.settings.firebase_service_account_json
+        if secret is None or not secret.get_secret_value().strip():
+            logger.warning("FIREBASE_SERVICE_ACCOUNT_JSON is missing; delivery skipped.")
             return False
         if not re.fullmatch(
             r"[a-z][a-z0-9-]{4,61}[a-z0-9]", self.settings.firebase_project_id
         ):
-            logger.warning("FCM configuration invalid; delivery skipped.")
+            logger.warning("FIREBASE_PROJECT_ID has invalid format; delivery skipped.")
+            return False
+        try:
+            info = json.loads(secret.get_secret_value())
+        except (ValueError, RecursionError):
+            logger.warning("Service-account JSON is malformed; delivery skipped.")
+            return False
+        if not isinstance(info, dict):
+            logger.warning("Service-account JSON is malformed; delivery skipped.")
+            return False
+        # token_uri is deliberately replaced with Google's endpoint in _access_token.
+        if any(
+            not isinstance(info.get(field), str) or not info[field].strip()
+            for field in ("project_id", "client_email", "private_key")
+        ):
+            logger.warning("Required service-account fields are missing; delivery skipped.")
+            return False
+        if info["project_id"] != self.settings.firebase_project_id:
+            logger.warning(
+                "Service-account project_id does not match FIREBASE_PROJECT_ID; delivery skipped."
+            )
             return False
         return True
 
