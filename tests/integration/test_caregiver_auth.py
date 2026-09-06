@@ -115,7 +115,7 @@ def test_assigned_caregiver_login_and_bearer_dependency(api_app, db_session):
     db_session.commit()
 
     response = login(
-        api_app, "4v8f-29hc", "CAREGIVER@example.com", "correct-password"
+        api_app, "  4v8f29hc  ", "CAREGIVER@example.com", "correct-password"
     )
     assert response.status_code == 200
     body = response.json()

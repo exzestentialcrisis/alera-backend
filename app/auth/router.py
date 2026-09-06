@@ -2,13 +2,49 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.auth.errors import AuthenticationError
-from app.auth.schema import CaregiverLoginRequest, CaregiverLoginResponse
-from app.auth.service import authenticate_caregiver, authenticate_patient
-from app.auth.schema import PatientAccessRequest
+from app.auth.schema import (
+    CaregiverLoginRequest,
+    CaregiverLoginResponse,
+    HouseholdValidationRequest,
+    HouseholdValidationResponse,
+    PatientAccessRequest,
+)
+from app.auth.service import (
+    authenticate_caregiver,
+    authenticate_patient,
+    validate_household_code,
+)
 from app.core.config import Settings, get_settings
 from app.db.database import get_db
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
+
+
+@router.post(
+    "/household/validate",
+    response_model=HouseholdValidationResponse,
+    summary="Validate a household code",
+    description=(
+        "Public onboarding check for an active, available household. This endpoint "
+        "does not authenticate a caregiver or issue a token."
+    ),
+    responses={
+        404: {
+            "description": "The household is unknown, archived, or unavailable."
+        }
+    },
+)
+def validate_household(
+    payload: HouseholdValidationRequest,
+    db: Session = Depends(get_db),
+):
+    result = validate_household_code(db, payload)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Household not found.",
+        )
+    return result
 
 
 @router.post("/caregiver/login", response_model=CaregiverLoginResponse)

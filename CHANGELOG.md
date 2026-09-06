@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a public, normalized household-code validation endpoint for caregiver
+  onboarding with minimal responses and generic unavailable-household failures.
 - Redesign patient access codes as globally usable 12-character credentials with
   selector-backed lookup, normalized input, and generic authentication failures.
 - Require bearer authentication on the caregiver alert API and scope alert reads

@@ -13,6 +13,22 @@ class CaregiverLoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class HouseholdValidationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    household_code: str = Field(
+        min_length=1,
+        max_length=32,
+        description="Household code, canonically formatted as XXXX-XXXX.",
+        examples=["4V8F-29HC"],
+    )
+
+
+class HouseholdValidationResponse(BaseModel):
+    valid: Literal[True] = True
+    household_name: str
+
+
 class ActorProfile(BaseModel):
     user_id: UUID
     full_name: str

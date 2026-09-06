@@ -2,17 +2,21 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.auth.errors import AuthenticationError
-from app.auth.schema import CaregiverLoginRequest, PatientAccessRequest
+from app.auth.schema import (
+    CaregiverLoginRequest,
+    HouseholdValidationRequest,
+    PatientAccessRequest,
+)
 from app.auth.security import create_access_token, verify_password
 from app.core.config import Settings
 from app.core.time import utc_now
-from app.household_access.model import PatientAccessCode
+from app.household_access.model import CaregiverPatientAssignment, PatientAccessCode
 from app.household_access.security import (
     access_code_selector,
     normalize_access_code,
     verify_access_code,
 )
-from app.household_access.model import CaregiverPatientAssignment
+from app.households.codes import normalize_household_code
 from app.households.model import Household, HouseholdStatus
 from app.patients.model import ElderlyPatient
 from app.users.model import AccountStatus, User, UserRole
@@ -22,10 +26,12 @@ def authenticate_caregiver(
     db: Session, credentials: CaregiverLoginRequest, settings: Settings
 ) -> dict:
     failure = AuthenticationError("Invalid household code, email, or password.")
+    normalized_household_code = normalize_household_code(credentials.household_code)
+    if normalized_household_code is None:
+        raise failure
     household = db.scalar(
         select(Household).where(
-            func.upper(Household.household_code)
-            == credentials.household_code.strip().upper(),
+            func.upper(Household.household_code) == normalized_household_code,
             Household.household_status == HouseholdStatus.ACTIVE,
             Household.archived_at.is_(None),
         )
@@ -82,6 +88,25 @@ def authenticate_caregiver(
             "household_code": household.household_code,
         },
     }
+
+
+def validate_household_code(
+    db: Session, payload: HouseholdValidationRequest
+) -> dict | None:
+    """Resolve only the public display data for an available household."""
+    normalized = normalize_household_code(payload.household_code)
+    if normalized is None:
+        return None
+    household_name = db.scalar(
+        select(Household.household_name).where(
+            func.upper(Household.household_code) == normalized,
+            Household.household_status == HouseholdStatus.ACTIVE,
+            Household.archived_at.is_(None),
+        )
+    )
+    if household_name is None:
+        return None
+    return {"valid": True, "household_name": household_name}
 
 
 def authenticate_patient(

@@ -23,6 +23,23 @@ Caregivers and care admins authenticate within a household using
 random secret and set `ALERA_JWT_ACCESS_TOKEN_MINUTES` to the desired positive
 token lifetime.
 
+The caregiver onboarding flow can check a household before requesting caregiver
+credentials:
+
+```json
+POST /api/v1/auth/household/validate
+{"household_code":"4V8F-29HC"}
+```
+
+Lowercase input, surrounding whitespace, and an omitted hyphen are normalized.
+An active, non-archived household returns only `{"valid":true,"household_name":"…"}`.
+Unknown, inactive, or archived households share the same generic 404 response.
+This public endpoint neither authenticates a user nor issues a token, and caregiver
+login independently rechecks the household, credentials, account status, role,
+ownership or active assignment, and authorization. Submitted household codes are
+not logged. The application has no rate-limit middleware, so deployments must
+apply rate limiting to this unauthenticated endpoint at the edge/API gateway.
+
 To create or refresh the developer demo caregiver and ensure its active patient
 assignment exists, configure the three demo variables and run:
 

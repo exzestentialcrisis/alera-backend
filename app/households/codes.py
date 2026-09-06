@@ -13,6 +13,18 @@ def generate_household_code() -> str:
     return f"{raw[:4]}-{raw[4:]}"
 
 
+def normalize_household_code(value: str) -> str | None:
+    """Return an eight-character household code in its canonical form."""
+    if not isinstance(value, str):
+        return None
+    compact = value.strip().upper().replace("-", "")
+    if len(compact) != 8 or any(
+        character not in HOUSEHOLD_CODE_ALPHABET for character in compact
+    ):
+        return None
+    return f"{compact[:4]}-{compact[4:]}"
+
+
 def allocate_household_code(db: Session, *, max_attempts: int = 20) -> str:
     """Allocate an unused code; the database unique constraint closes race windows."""
     from app.households.model import Household
