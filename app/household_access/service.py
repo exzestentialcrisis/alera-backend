@@ -15,7 +15,12 @@ from app.household_access.model import (
     CaregiverPatientAssignment,
     PatientAccessCode,
 )
-from app.household_access.security import generate_access_code, hash_access_code
+from app.household_access.security import (
+    access_code_selector,
+    generate_access_code,
+    hash_access_code,
+    verify_access_code,
+)
 from app.households.model import Household, HouseholdStatus
 from app.patients.model import ElderlyPatient
 from app.users.model import AccountStatus, User, UserRole
@@ -167,10 +172,24 @@ def issue_access_code(
     ).all()
     for code in existing:
         code.revoked_at = now
-    readable = generate_access_code()
+    # Hash comparison is needed because salted hashes are deliberately not unique.
+    # Keep retries bounded even though a 12-character collision is astronomically rare.
+    for _ in range(10):
+        readable = generate_access_code()
+        selector = access_code_selector(readable)
+        matching_hashes = db.scalars(
+            select(PatientAccessCode.code_hash).where(
+                PatientAccessCode.access_code_selector == selector
+            )
+        ).all()
+        if not any(verify_access_code(readable, value) for value in matching_hashes):
+            break
+    else:
+        raise AccessConflictError("Unable to generate a unique patient access code.")
     code = PatientAccessCode(
         patient_id=patient.patient_id,
         code_hash=hash_access_code(readable),
+        access_code_selector=selector,
         created_by_user_id=actor.user_id,
         created_at=now,
         expires_at=now + timedelta(hours=expires_in_hours),

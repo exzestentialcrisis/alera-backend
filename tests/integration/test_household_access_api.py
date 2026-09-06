@@ -158,7 +158,8 @@ def test_access_code_permissions_hashing_replacement_and_revocation(
     stored = db_session.get(PatientAccessCode, first.json()["access_code_id"])
     assert plaintext not in stored.code_hash
     assert verify_access_code(plaintext, stored.code_hash)
-    assert not verify_access_code("AAAA-AAAA-AAAA-AAAA", stored.code_hash)
+    assert stored.access_code_selector == plaintext[:4]
+    assert not verify_access_code("AAAA-AAAA-AAAA", stored.code_hash)
 
     replacement = request(api_app, "POST", path, headers=headers(caregiver, bearer=True), json={})
     assert replacement.status_code == 201

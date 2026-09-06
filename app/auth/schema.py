@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.users.model import UserRole
 
@@ -30,5 +30,9 @@ class CaregiverLoginResponse(BaseModel):
 
 
 class PatientAccessRequest(BaseModel):
-    household_code: str = Field(max_length=32)
-    access_code: str = Field(max_length=1024)
+    model_config = ConfigDict(extra="forbid")
+
+    # Authentication normalizes malformed values to the generic 401 response.
+    access_code: str = Field(
+        description="One-time patient access code, for example XXXX-XXXX-XXXX."
+    )

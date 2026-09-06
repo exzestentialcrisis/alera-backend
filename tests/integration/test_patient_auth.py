@@ -1,4 +1,5 @@
 from datetime import timedelta
+import stat
 
 import pytest
 
@@ -24,15 +25,15 @@ def setup_code(db):
     return household, patient, user, code, readable
 
 
-def enroll(app, household, code):
+def enroll(app, code):
     return request(app, "POST", "/api/v1/auth/patient/access", json={
-        "household_code": household, "access_code": code,
+        "access_code": code,
     })
 
 
 def test_patient_enrollment_and_replay(api_app, db_session):
     household, patient, user, code, readable = setup_code(db_session)
-    response = enroll(api_app, household.household_code, readable)
+    response = enroll(api_app, readable.lower().replace("-", ""))
     assert response.status_code == 200
     body = response.json()
     assert body["actor"]["role"] == "ELDERLY_PATIENT"
@@ -45,38 +46,34 @@ def test_patient_enrollment_and_replay(api_app, db_session):
     headers = {"Authorization": f"Bearer {body['access_token']}"}
     assert request(api_app, "GET", "/_test/current-actor", headers=headers).status_code == 200
     assert request(api_app, "GET", "/api/v1/alerts", headers=headers).status_code == 403
-    assert enroll(api_app, household.household_code, readable).status_code == 401
+    assert enroll(api_app, readable).status_code == 401
     db_session.refresh(code)
     assert code.used_at is not None
 
 
-@pytest.mark.parametrize("failure", ["household", "unknown", "revoked", "used", "expired", "archived", "disabled", "inactive", "mismatch", "unicode"])
+@pytest.mark.parametrize("failure", ["unknown", "revoked", "used", "expired", "archived", "disabled", "inactive", "unicode", "malformed"])
 def test_generic_patient_failures(api_app, db_session, failure):
     household, patient, user, code, readable = setup_code(db_session)
-    household_code = household.household_code
-    if failure == "household": household_code = "ZZZZ-ZZZZ"
-    if failure == "unknown": readable = "AAAA-AAAA-AAAA-AAAA"
+    if failure == "unknown": readable = "AAAA-AAAA-AAAA"
     if failure == "unicode": readable = "你好"
+    if failure == "malformed": readable = "AAAA-AAAA"
     if failure == "revoked": code.revoked_at = utc_now()
     if failure == "used": code.used_at = utc_now()
     if failure == "expired": code.expires_at = utc_now() - timedelta(seconds=1)
     if failure == "archived": patient.archived_at = utc_now()
     if failure == "disabled": user.account_status = AccountStatus.DISABLED
     if failure == "inactive": user.account_status = AccountStatus.INACTIVE
-    if failure == "mismatch":
-        _, other, _, _ = make_household(db_session, "Other", "CCCC-DDDD")
-        household_code = other.household_code
     db_session.commit()
-    response = enroll(api_app, household_code, readable)
+    response = enroll(api_app, readable)
     assert response.status_code == 401
-    assert response.json() == {"detail": "Invalid household code or access code."}
+    assert response.json() == {"detail": "Invalid access code."}
     assert response.headers["www-authenticate"] == "Bearer"
 
 
 @pytest.mark.parametrize("change", ["disabled", "archived_user", "archived_patient", "household", "moved"])
 def test_patient_session_rechecks_state(api_app, db_session, change):
     household, patient, user, _, readable = setup_code(db_session)
-    token = enroll(api_app, household.household_code, readable).json()["access_token"]
+    token = enroll(api_app, readable).json()["access_token"]
     if change == "disabled": user.account_status = AccountStatus.DISABLED
     if change == "archived_user": user.account_status = AccountStatus.ARCHIVED
     if change == "archived_patient": patient.archived_at = utc_now()
@@ -99,6 +96,15 @@ def test_demo_requires_development_and_explicit_reset(db_session):
     assert code.revoked_at is not None
 
 
+def test_demo_code_output_is_private(tmp_path):
+    from scripts.demo_patient_access import write_private_code
+
+    output = tmp_path / "demo-code.txt"
+    write_private_code(str(output), "ABCD-EFGH-JKMN")
+    assert output.read_text() == "ABCD-EFGH-JKMN\n"
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+
+
 def test_concurrent_redemption_has_one_winner(db_session, integration_engine, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
@@ -119,7 +125,7 @@ def test_concurrent_redemption_has_one_winner(db_session, integration_engine, mo
         return result
 
     monkeypatch.setattr(service, "verify_access_code", synchronized_verify)
-    payload = PatientAccessRequest(household_code=household.household_code, access_code=readable)
+    payload = PatientAccessRequest(access_code=readable)
 
     def redeem():
         with Session(integration_engine) as db:

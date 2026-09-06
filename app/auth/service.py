@@ -7,7 +7,11 @@ from app.auth.security import create_access_token, verify_password
 from app.core.config import Settings
 from app.core.time import utc_now
 from app.household_access.model import PatientAccessCode
-from app.household_access.security import verify_access_code
+from app.household_access.security import (
+    access_code_selector,
+    normalize_access_code,
+    verify_access_code,
+)
 from app.household_access.model import CaregiverPatientAssignment
 from app.households.model import Household, HouseholdStatus
 from app.patients.model import ElderlyPatient
@@ -84,15 +88,19 @@ def authenticate_patient(
     db: Session, credentials: PatientAccessRequest, settings: Settings
 ) -> dict:
 
-    failure = AuthenticationError("Invalid household code or access code.")
+    failure = AuthenticationError("Invalid access code.")
+    normalized = normalize_access_code(credentials.access_code)
+    if normalized is None:
+        raise failure
     now = utc_now()
+    # A short fixed bound prevents selector collisions from amplifying scrypt work.
     candidates = db.execute(
         select(PatientAccessCode, ElderlyPatient, User, Household)
         .join(ElderlyPatient, ElderlyPatient.patient_id == PatientAccessCode.patient_id)
         .join(User, User.user_id == ElderlyPatient.user_id)
         .join(Household, Household.household_id == ElderlyPatient.household_id)
         .where(
-            func.upper(Household.household_code) == credentials.household_code.strip().upper(),
+            PatientAccessCode.access_code_selector == access_code_selector(normalized),
             Household.household_status == HouseholdStatus.ACTIVE,
             Household.archived_at.is_(None),
             ElderlyPatient.archived_at.is_(None),
@@ -101,10 +109,10 @@ def authenticate_patient(
             PatientAccessCode.used_at.is_(None),
             PatientAccessCode.revoked_at.is_(None),
             PatientAccessCode.expires_at > now,
-        )
+        ).limit(8)
     )
     for code, patient, user, household in candidates:
-        if not verify_access_code(credentials.access_code.strip().upper(), code.code_hash):
+        if not verify_access_code(normalized, code.code_hash):
             continue
         # Conditional UPDATE is rechecked after concurrent writers commit.
         consumed = db.execute(

@@ -4,15 +4,29 @@ import hmac
 import secrets
 
 
-ACCESS_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+ACCESS_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 SCRYPT_N = 2**14
 SCRYPT_R = 8
 SCRYPT_P = 1
 
 
 def generate_access_code() -> str:
-    raw = "".join(secrets.choice(ACCESS_CODE_ALPHABET) for _ in range(16))
-    return "-".join(raw[index : index + 4] for index in range(0, 16, 4))
+    raw = "".join(secrets.choice(ACCESS_CODE_ALPHABET) for _ in range(12))
+    return "-".join(raw[index : index + 4] for index in range(0, 12, 4))
+
+
+def normalize_access_code(value: str) -> str | None:
+    """Return the canonical presentation form without doing expensive hashing."""
+    if not isinstance(value, str):
+        return None
+    compact = value.strip().upper().replace("-", "")
+    if len(compact) != 12 or any(char not in ACCESS_CODE_ALPHABET for char in compact):
+        return None
+    return "-".join(compact[index : index + 4] for index in range(0, 12, 4))
+
+
+def access_code_selector(code: str) -> str:
+    return code[:4]
 
 
 def hash_access_code(code: str) -> str:

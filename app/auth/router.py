@@ -40,7 +40,7 @@ def patient_access(
     except AuthenticationError as exc:
         db.rollback()
         raise HTTPException(
-            status_code=401, detail="Invalid household code or access code.",
+            status_code=401, detail="Invalid access code.",
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
     except Exception:

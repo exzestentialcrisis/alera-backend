@@ -298,3 +298,38 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             )
             connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{database_name}"')
         admin_engine.dispose()
+
+
+def test_access_code_selector_migration_revokes_legacy_codes_and_preserves_records(test_database_url):
+    base_url = make_url(test_database_url)
+    database_name = f"alera_selector_migration_{uuid4().hex[:10]}"
+    url = base_url.set(database=database_name)
+    admin_url = base_url.set(database="postgres")
+    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    with admin_engine.connect() as connection:
+        connection.exec_driver_sql(f'CREATE DATABASE "{database_name}"')
+    engine = create_engine(url)
+    try:
+        migrate(url.render_as_string(hide_password=False), "upgrade", "f3a9120bc651")
+        with engine.begin() as connection:
+            admin_id, patient_user_id, household_id, patient_id = (uuid4() for _ in range(4))
+            connection.execute(text("INSERT INTO users (user_id, full_name, role, account_status, created_at, updated_at) VALUES (:id, 'Admin', 'CARE_ADMIN', 'ACTIVE', now(), now()), (:patient, 'Patient', 'ELDERLY_PATIENT', 'ACTIVE', now(), now())"), {"id": admin_id, "patient": patient_user_id})
+            connection.execute(text("INSERT INTO households (household_id, created_by_user_id, household_name, household_code, household_status, created_at, updated_at) VALUES (:id, :admin, 'Home', 'ABCD-EFGH', 'ACTIVE', now(), now())"), {"id": household_id, "admin": admin_id})
+            connection.execute(text("INSERT INTO elderly_patients (patient_id, user_id, household_id, normal_hr_min, normal_hr_max, usual_spo2_min, health_platform, integration_status, created_at, updated_at) VALUES (:id, :user, :household, 60, 100, 95, 'SIMULATOR', 'NOT_CONNECTED', now(), now())"), {"id": patient_id, "user": patient_user_id, "household": household_id})
+            connection.execute(text("INSERT INTO patient_access_codes (access_code_id, patient_id, code_hash, created_by_user_id, created_at, expires_at) VALUES (:id, :patient, 'legacy-hash', :admin, now(), now() + interval '1 day')"), {"id": uuid4(), "patient": patient_id, "admin": admin_id})
+        migrate(url.render_as_string(hide_password=False), "upgrade", "head")
+        with engine.connect() as connection:
+            row = connection.execute(text("SELECT access_code_selector, revoked_at FROM patient_access_codes")).one()
+            assert row.access_code_selector is None and row.revoked_at is not None
+            assert connection.execute(text("SELECT count(*) FROM elderly_patients")).scalar_one() == 1
+            assert "ix_patient_access_codes_active_selector" in {item["name"] for item in inspect(engine).get_indexes("patient_access_codes")}
+        migrate(url.render_as_string(hide_password=False), "downgrade", "f3a9120bc651")
+        assert "access_code_selector" not in {column["name"] for column in inspect(engine).get_columns("patient_access_codes")}
+        migrate(url.render_as_string(hide_password=False), "upgrade", "head")
+        assert "access_code_selector" in {column["name"] for column in inspect(engine).get_columns("patient_access_codes")}
+    finally:
+        engine.dispose()
+        with admin_engine.connect() as connection:
+            connection.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :name AND pid <> pg_backend_pid()"), {"name": database_name})
+            connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{database_name}"')
+        admin_engine.dispose()

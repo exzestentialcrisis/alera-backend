@@ -73,7 +73,6 @@ def test_create_and_later_enroll(api_app, db_session, role):
                    headers=headers(actor, household), json={})
     assert code.status_code == 201
     enrolled = request(api_app, "POST", "/api/v1/auth/patient/access", json={
-        "household_code": household.household_code,
         "access_code": code.json()["access_code"],
     })
     assert enrolled.status_code == 200

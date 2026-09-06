@@ -25,7 +25,9 @@ def issue_demo_code(db, *, environment: str, reset: bool):
     if patient is None:
         raise RuntimeError("Demo patient must already exist.")
     previous = db.scalar(select(PatientAccessCode.access_code_id).where(
-        PatientAccessCode.patient_id == DEMO_PATIENT_ID
+        PatientAccessCode.patient_id == DEMO_PATIENT_ID,
+        PatientAccessCode.used_at.is_(None),
+        PatientAccessCode.revoked_at.is_(None),
     ).limit(1))
     if previous is not None and not reset:
         raise RuntimeError("A code was previously issued; explicitly use --reset to issue another.")
@@ -33,6 +35,13 @@ def issue_demo_code(db, *, environment: str, reset: bool):
     owner = db.get(User, household.created_by_user_id)
     code, readable = issue_access_code(db, patient.patient_id, owner, 24)
     return readable
+
+
+def write_private_code(path: str, code: str) -> None:
+    """Write the only plaintext copy with owner-only permissions."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as output:
+        output.write(code + "\n")
 
 
 def main():
@@ -48,10 +57,8 @@ def main():
         parser.error("Disable SQL_ECHO before issuing demo secrets.")
     with get_session_factory()() as db:
         readable = issue_demo_code(db, environment=settings.environment, reset=args.reset)
-        fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            with os.fdopen(fd, "w") as output:
-                output.write(readable + "\n")
+            write_private_code(args.output, readable)
             db.commit()
         except Exception:
             db.rollback()

@@ -269,6 +269,37 @@ password. It does not issue an access code. Use the existing explicit
 `POST /api/v1/patients/{patient_id}/access-codes` action afterward, then the
 existing patient access login flow.
 
+## Patient access codes
+
+Patient access codes are one-time, globally usable credentials in the canonical
+format `XXXX-XXXX-XXXX`. They contain 12 random uppercase characters and omit
+visually ambiguous `0`, `O`, `1`, `I`, and `L`. Caregivers issue them through
+the existing `POST /api/v1/patients/{patient_id}/access-codes` endpoint; its
+authorization, request, and 201 response shape are unchanged. The plaintext
+code appears only in that response.
+
+Patients authenticate without a household code:
+
+```json
+POST /api/v1/auth/patient/access
+{"access_code":"7K3M-9Q2D-R8TX"}
+```
+
+Lowercase input, surrounding whitespace, and omitted hyphens are accepted.
+The service normalizes to the canonical form, uses a four-character selector to
+find a small set of eligible salted-scrypt hashes, and verifies the whole code
+before resolving the patient household. It returns the existing patient bearer
+response and claims. Invalid, expired, revoked, consumed, malformed, or
+unavailable credentials receive the same generic 401 response. The service does
+not log submitted codes. Deployments should apply standard edge/API rate limiting
+to this unauthenticated endpoint; Alera does not add a separate rate-limit
+framework here.
+
+Migration `c8d4e52f6b91` adds the nullable selector and active-code lookup index.
+It revokes every previously unconsumed legacy code because its old format cannot
+be globally resolved, while retaining every record for audit and leaving patient
+data and existing JWTs untouched. Run `alembic upgrade head`.
+
 Deploy with `alembic upgrade head`. Migration `f3a9120bc651` preserves existing
 rows, allows unknown birthdate/sex, and adds nullable profile columns. Its
 downgrade refuses rows with missing demographics or populated new profile fields
