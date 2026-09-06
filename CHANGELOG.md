@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add assignment- and ownership-scoped caregiver patient list/detail reads with
+  paginated search and set-based current-health summaries.
 - Add a public, normalized household-code validation endpoint for caregiver
   onboarding with minimal responses and generic unavailable-household failures.
 - Redesign patient access codes as globally usable 12-character credentials with

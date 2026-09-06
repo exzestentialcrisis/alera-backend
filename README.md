@@ -251,6 +251,37 @@ Mocked HTTP tests (no deployed calls):
 
 ## Caregiver-created patients
 
+### Caregiver patient reads
+
+The authenticated Flutter People and Patient Detail views use:
+
+```text
+GET /api/v1/patients?limit=20&offset=0&search=name
+GET /api/v1/patients/{patient_id}
+```
+
+Both require the existing bearer token. Caregivers see only non-archived patients
+for whom they have a current assignment; sharing a household is insufficient.
+Care admins see assigned and unassigned non-archived patients in active households
+they own. Elderly-patient actors receive 403, and patient detail returns 404 for
+records outside the actor's scope. The list is ordered by full name and then
+patient ID, and returns an authorization-consistent total before
+pagination (`limit` defaults to 20 and is capped at 100).
+
+Both responses include `current_summary`. Latest heart-rate and SpO2 readings use
+accepted (`VALID_REALTIME` or `DELAYED_USABLE`) events and event time, with stable
+tie-breaking; invalid or older delayed readings do not replace newer readings.
+`last_check_in` is the newest returned HR/SpO2 event time. Alert counts include
+the alert API's unresolved `ACTIVE` and `ACKNOWLEDGED` statuses. Monitoring is
+`CRITICAL` when any unresolved Critical alert exists, otherwise `WARNING` when
+any unresolved Warning exists, `STABLE` when accepted HR/SpO2 data exists, and
+`NO_DATA` otherwise. Device connection and sync values come directly from the
+existing patient integration status and last-sync fields; no readings are inferred.
+Reads use a fixed set of page, summary, alert, and assignment queries and do not
+mutate health events, trackers, or alerts.
+
+### Patient creation
+
 Authenticated caregivers and care admins can call `POST /api/v1/patients` with
 `Authorization: Bearer <access token>`. The household comes exclusively from
 the JWT. Current active household membership (caregiver assignment) or ownership

@@ -1,6 +1,7 @@
 from uuid import UUID
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -9,11 +10,73 @@ from app.auth.security import decode_access_token
 from app.core.config import Settings, get_settings
 from app.db.database import get_db
 from app.household_access.errors import AccessForbiddenError
-from app.patients.schema import PatientCreate, PatientCreated
-from app.patients.service import create_patient
+from app.patients.errors import PatientNotFoundError
+from app.patients.schema import (
+    PatientCreate,
+    PatientCreated,
+    PatientDetail,
+    PatientListResponse,
+)
+from app.patients.service import (
+    create_patient,
+    get_patient,
+    list_patients,
+    patient_read_payload,
+)
 from app.users.model import User
 
 router = APIRouter(prefix="/api/v1/patients", tags=["Patients"])
+
+
+@router.get(
+    "",
+    response_model=PatientListResponse,
+    summary="List patients visible to the caregiver",
+    description=(
+        "Returns non-archived patients in active households within the requesting "
+        "caregiver's assignment or care administrator's ownership scope."
+    ),
+)
+def read_patients(
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    search: Annotated[str | None, Query(max_length=150)] = None,
+    actor: User = Depends(get_current_caregiver),
+    db: Session = Depends(get_db),
+):
+    rows, total = list_patients(
+        db,
+        actor,
+        search=search.strip() if search and search.strip() else None,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "items": [patient_read_payload(row, detail=False) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get(
+    "/{patient_id}",
+    response_model=PatientDetail,
+    summary="Get a patient visible to the caregiver",
+    responses={404: {"description": "Patient not found in the actor's scope."}},
+)
+def read_patient(
+    patient_id: UUID,
+    actor: User = Depends(get_current_caregiver),
+    db: Session = Depends(get_db),
+):
+    try:
+        return patient_read_payload(get_patient(db, actor, patient_id), detail=True)
+    except PatientNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("", response_model=PatientCreated, status_code=201)

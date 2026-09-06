@@ -1,3 +1,4 @@
+import enum
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -5,7 +6,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.household_access.schema import CaregiverAssignmentResponse
-from app.patients.model import Sex
+from app.event_evaluations.model import EvaluationSeverity
+from app.patients.model import IntegrationStatus, Sex
 from app.users.model import AccountStatus
 
 
@@ -34,3 +36,52 @@ class PatientCreated(PatientCreate):
     archived_at: datetime | None
     assignment: CaregiverAssignmentResponse | None
     created_at: datetime
+
+
+class MonitoringStatus(str, enum.Enum):
+    CRITICAL = "CRITICAL"
+    WARNING = "WARNING"
+    STABLE = "STABLE"
+    NO_DATA = "NO_DATA"
+
+
+class LatestReading(BaseModel):
+    value: Decimal
+    unit: str | None
+    recorded_at: datetime
+
+
+class CurrentHealthSummary(BaseModel):
+    latest_heart_rate: LatestReading | None
+    latest_spo2: LatestReading | None
+    last_check_in: datetime | None
+    active_alert_count: int
+    highest_active_alert_severity: EvaluationSeverity | None
+    monitoring_status: MonitoringStatus
+    device_connection_status: IntegrationStatus
+    last_device_sync_at: datetime | None
+
+
+class PatientListItem(BaseModel):
+    patient_id: UUID
+    user_id: UUID
+    household_id: UUID
+    full_name: str
+    birthdate: date | None
+    sex: Sex | None
+    phone_number: str | None
+    address_or_room: str | None
+    account_status: AccountStatus
+    created_at: datetime
+    current_summary: CurrentHealthSummary
+
+
+class PatientListResponse(BaseModel):
+    items: list[PatientListItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class PatientDetail(PatientCreated):
+    current_summary: CurrentHealthSummary

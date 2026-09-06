@@ -1,14 +1,272 @@
+from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import Session
 
+from app.alerts.model import Alert, AlertStatus
+from app.event_evaluations.model import EvaluationSeverity
+from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 from app.household_access.errors import AccessForbiddenError
 from app.household_access.model import CaregiverPatientAssignment
 from app.households.model import Household, HouseholdStatus
+from app.patients.errors import PatientNotFoundError
 from app.patients.model import ElderlyPatient
-from app.patients.schema import PatientCreate, PatientCreated
+from app.patients.schema import (
+    CurrentHealthSummary,
+    LatestReading,
+    MonitoringStatus,
+    PatientCreate,
+    PatientCreated,
+)
 from app.users.model import AccountStatus, User, UserRole
+
+
+ACCEPTED_EVENT_STATUSES = (
+    ValidationStatus.VALID_REALTIME,
+    ValidationStatus.DELAYED_USABLE,
+)
+ACTIVE_ALERT_STATUSES = (AlertStatus.ACTIVE, AlertStatus.ACKNOWLEDGED)
+SUMMARY_METRICS = (MetricType.HEART_RATE, MetricType.SPO2)
+
+
+@dataclass(frozen=True)
+class PatientReadRow:
+    patient: ElderlyPatient
+    user: User
+    assignment: CaregiverPatientAssignment | None
+    current_summary: CurrentHealthSummary
+
+
+def _patient_scope(actor: User) -> Select:
+    base = (
+        select(ElderlyPatient.patient_id)
+        .join(Household, Household.household_id == ElderlyPatient.household_id)
+        .where(
+            ElderlyPatient.archived_at.is_(None),
+            Household.household_status == HouseholdStatus.ACTIVE,
+            Household.archived_at.is_(None),
+        )
+    )
+    if actor.role is UserRole.CAREGIVER:
+        return base.where(
+            ElderlyPatient.patient_id.in_(
+                select(CaregiverPatientAssignment.patient_id).where(
+                    CaregiverPatientAssignment.caregiver_user_id == actor.user_id,
+                    CaregiverPatientAssignment.unassigned_at.is_(None),
+                )
+            )
+        )
+    if actor.role is UserRole.CARE_ADMIN:
+        return base.where(Household.created_by_user_id == actor.user_id)
+    return base.where(False)
+
+
+def _summary_map(
+    db: Session, patients: list[ElderlyPatient]
+) -> dict[UUID, CurrentHealthSummary]:
+    if not patients:
+        return {}
+    patient_ids = [patient.patient_id for patient in patients]
+    ranked_events = (
+        select(
+            HealthEvent.patient_id.label("patient_id"),
+            HealthEvent.metric_type.label("metric_type"),
+            HealthEvent.numeric_value.label("numeric_value"),
+            HealthEvent.metric_unit.label("metric_unit"),
+            HealthEvent.recorded_at.label("recorded_at"),
+            func.row_number().over(
+                partition_by=(HealthEvent.patient_id, HealthEvent.metric_type),
+                order_by=(
+                    HealthEvent.recorded_at.desc(),
+                    HealthEvent.received_at.desc(),
+                    HealthEvent.event_id.desc(),
+                ),
+            ).label("position"),
+        )
+        .where(
+            HealthEvent.patient_id.in_(patient_ids),
+            HealthEvent.metric_type.in_(SUMMARY_METRICS),
+            HealthEvent.validation_status.in_(ACCEPTED_EVENT_STATUSES),
+            HealthEvent.numeric_value.is_not(None),
+        )
+        .subquery()
+    )
+    event_rows = db.execute(
+        select(ranked_events).where(ranked_events.c.position == 1)
+    ).mappings().all()
+    readings: dict[UUID, dict[MetricType, LatestReading]] = {}
+    for row in event_rows:
+        readings.setdefault(row["patient_id"], {})[row["metric_type"]] = LatestReading(
+            value=row["numeric_value"],
+            unit=row["metric_unit"],
+            recorded_at=row["recorded_at"],
+        )
+
+    severity_rank = case(
+        (Alert.severity == EvaluationSeverity.CRITICAL, 3),
+        (Alert.severity == EvaluationSeverity.WARNING, 2),
+        else_=1,
+    )
+    alert_rows = db.execute(
+        select(
+            Alert.patient_id,
+            func.count(Alert.alert_id),
+            func.max(severity_rank),
+        )
+        .where(
+            Alert.patient_id.in_(patient_ids),
+            Alert.status.in_(ACTIVE_ALERT_STATUSES),
+        )
+        .group_by(Alert.patient_id)
+    ).all()
+    alerts = {
+        patient_id: (count, rank) for patient_id, count, rank in alert_rows
+    }
+    result = {}
+    for patient in patients:
+        patient_readings = readings.get(patient.patient_id, {})
+        heart_rate = patient_readings.get(MetricType.HEART_RATE)
+        spo2 = patient_readings.get(MetricType.SPO2)
+        check_ins = [
+            reading.recorded_at
+            for reading in (heart_rate, spo2)
+            if reading is not None
+        ]
+        alert_count, highest_rank = alerts.get(patient.patient_id, (0, None))
+        highest = {
+            3: EvaluationSeverity.CRITICAL,
+            2: EvaluationSeverity.WARNING,
+            1: EvaluationSeverity.INFO,
+        }.get(highest_rank)
+        if highest is EvaluationSeverity.CRITICAL:
+            monitoring = MonitoringStatus.CRITICAL
+        elif highest is EvaluationSeverity.WARNING:
+            monitoring = MonitoringStatus.WARNING
+        elif check_ins:
+            monitoring = MonitoringStatus.STABLE
+        else:
+            monitoring = MonitoringStatus.NO_DATA
+        result[patient.patient_id] = CurrentHealthSummary(
+            latest_heart_rate=heart_rate,
+            latest_spo2=spo2,
+            last_check_in=max(check_ins) if check_ins else None,
+            active_alert_count=alert_count,
+            highest_active_alert_severity=highest,
+            monitoring_status=monitoring,
+            device_connection_status=patient.integration_status,
+            last_device_sync_at=patient.last_sync_at,
+        )
+    return result
+
+
+def _assignments_for_actor(
+    db: Session, actor: User, patient_ids: list[UUID]
+) -> dict[UUID, CaregiverPatientAssignment]:
+    if actor.role is not UserRole.CAREGIVER or not patient_ids:
+        return {}
+    return {
+        assignment.patient_id: assignment
+        for assignment in db.scalars(
+            select(CaregiverPatientAssignment).where(
+                CaregiverPatientAssignment.caregiver_user_id == actor.user_id,
+                CaregiverPatientAssignment.patient_id.in_(patient_ids),
+                CaregiverPatientAssignment.unassigned_at.is_(None),
+            )
+        ).all()
+    }
+
+
+def list_patients(
+    db: Session,
+    actor: User,
+    *,
+    search: str | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[PatientReadRow], int]:
+    filters: list[Any] = [ElderlyPatient.patient_id.in_(_patient_scope(actor))]
+    if search:
+        filters.append(User.full_name.ilike(f"%{search}%"))
+    total = db.scalar(
+        select(func.count(ElderlyPatient.patient_id))
+        .join(User, User.user_id == ElderlyPatient.user_id)
+        .where(*filters)
+    ) or 0
+    rows = db.execute(
+        select(ElderlyPatient, User)
+        .join(User, User.user_id == ElderlyPatient.user_id)
+        .where(*filters)
+        .order_by(User.full_name, ElderlyPatient.patient_id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    patients = [patient for patient, _user in rows]
+    summaries = _summary_map(db, patients)
+    assignments = _assignments_for_actor(
+        db, actor, [patient.patient_id for patient in patients]
+    )
+    return [
+        PatientReadRow(
+            patient,
+            user,
+            assignments.get(patient.patient_id),
+            summaries[patient.patient_id],
+        )
+        for patient, user in rows
+    ], total
+
+
+def get_patient(db: Session, actor: User, patient_id: UUID) -> PatientReadRow:
+    row = db.execute(
+        select(ElderlyPatient, User)
+        .join(User, User.user_id == ElderlyPatient.user_id)
+        .where(
+            ElderlyPatient.patient_id == patient_id,
+            ElderlyPatient.patient_id.in_(_patient_scope(actor)),
+        )
+    ).one_or_none()
+    if row is None:
+        raise PatientNotFoundError("Patient not found.")
+    patient, user = row
+    assignment = _assignments_for_actor(db, actor, [patient_id]).get(patient_id)
+    return PatientReadRow(
+        patient,
+        user,
+        assignment,
+        _summary_map(db, [patient])[patient_id],
+    )
+
+
+def patient_read_payload(row: PatientReadRow, *, detail: bool) -> dict:
+    patient, user = row.patient, row.user
+    payload = {
+        "patient_id": patient.patient_id,
+        "user_id": patient.user_id,
+        "household_id": patient.household_id,
+        "full_name": user.full_name,
+        "birthdate": patient.birthdate,
+        "sex": patient.sex,
+        "phone_number": user.phone_number,
+        "address_or_room": patient.address_or_room,
+        "account_status": user.account_status,
+        "created_at": patient.created_at,
+        "current_summary": row.current_summary,
+    }
+    if detail:
+        payload.update(
+            emergency_contact_name=patient.emergency_contact_name,
+            emergency_contact_phone=patient.emergency_contact_phone,
+            known_conditions=patient.known_conditions,
+            medications=patient.medications,
+            baseline_heart_rate=patient.baseline_heart_rate,
+            baseline_spo2=patient.baseline_spo2,
+            monitoring_notes=patient.health_notes,
+            archived_at=patient.archived_at,
+            assignment=row.assignment,
+        )
+    return payload
 
 
 def create_patient(db: Session, actor: User, household_id: UUID,
