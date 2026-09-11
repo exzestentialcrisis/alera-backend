@@ -1,3 +1,4 @@
+from sqlalchemy import SmallInteger, String
 from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 
 from app.reminders.enums import (
@@ -27,9 +28,11 @@ def test_reminder_tables_columns_and_foreign_keys():
     required_template_columns = {
         "reminder_template_id", "patient_id", "created_by_user_id", "title", "category",
         "priority", "start_date", "start_time", "snooze_allowed", "default_snooze_minutes",
-        "missed_after_minutes", "notification_channels", "status", "created_at", "updated_at",
+        "missed_after_minutes", "timezone", "due_after_minutes", "notification_channels", "status", "created_at", "updated_at",
     }
     assert all(not ReminderTemplate.__table__.c[name].nullable for name in required_template_columns)
+    assert isinstance(ReminderTemplate.__table__.c.timezone.type, String)
+    assert isinstance(ReminderTemplate.__table__.c.due_after_minutes.type, SmallInteger)
     assert all(ReminderTemplate.__table__.c[name].nullable for name in ("instructions", "schedule_rule", "archived_at"))
     assert _foreign_key_targets(ReminderTemplate) == {
         "elderly_patients.patient_id", "users.user_id"
@@ -84,6 +87,7 @@ def test_reminder_server_defaults_constraints_and_indexes():
     assert str(template.c.snooze_allowed.server_default.arg) == "true"
     assert str(template.c.default_snooze_minutes.server_default.arg) == "10"
     assert str(template.c.missed_after_minutes.server_default.arg) == "30"
+    assert str(template.c.due_after_minutes.server_default.arg) == "15"
     assert str(template.c.notification_channels.server_default.arg) == "IN_APP"
     assert str(template.c.status.server_default.arg) == "ACTIVE"
     assert str(occurrence.c.status.server_default.arg) == "UPCOMING"
@@ -101,12 +105,22 @@ def test_reminder_server_defaults_constraints_and_indexes():
     assert constraints["reminder_missed_after_nonnegative"] == (
         "missed_after_minutes >= 0"
     )
+    assert constraints["reminder_due_after_nonnegative"] == "due_after_minutes >= 0"
     assert _index_names(ReminderTemplate) == {
         "idx_reminder_templates_created_by", "idx_reminder_templates_patient_id", "idx_reminder_templates_status"
     }
     assert _index_names(ReminderOccurrence) == {
-        "idx_reminder_occurrences_due_at", "idx_reminder_occurrences_status", "idx_reminder_occurrences_template_id"
+        "idx_reminder_occurrences_due_at", "idx_reminder_occurrences_status", "idx_reminder_occurrences_template_id", "uq_reminder_occurrences_template_scheduled_at"
     }
+    occurrence_index = next(
+        index
+        for index in occurrence.indexes
+        if index.name == "uq_reminder_occurrences_template_scheduled_at"
+    )
+    assert occurrence_index.unique is True
+    assert [column.name for column in occurrence_index.columns] == [
+        "reminder_template_id", "scheduled_at"
+    ]
     assert _index_names(ReminderAction) == {
         "idx_reminder_actions_occurrence_id", "idx_reminder_actions_performed_by",
         "uq_reminder_actions_client_action_id",

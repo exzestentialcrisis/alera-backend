@@ -29,7 +29,7 @@ def migrate(database_url, operation, revision):
         get_settings.cache_clear()
 
 
-def insert_reminder_action_fixture(connection):
+def insert_reminder_action_fixture(connection, *, timezone="Asia/Manila"):
     admin_id, patient_user_id, household_id, patient_id = (uuid4() for _ in range(4))
     connection.execute(
         text(
@@ -61,13 +61,19 @@ def insert_reminder_action_fixture(connection):
             "household_id": household_id,
         },
     )
+    template_columns = "patient_id, created_by_user_id, title, category, start_date, start_time"
+    template_values = ":patient_id, :admin_id, 'Reminder', 'OTHER', CURRENT_DATE, CURRENT_TIME"
+    params = {"patient_id": patient_id, "admin_id": admin_id}
+    if timezone is not None:
+        template_columns += ", timezone"
+        template_values += ", :timezone"
+        params["timezone"] = timezone
     template_id = connection.execute(
         text(
-            "INSERT INTO reminder_templates (patient_id, created_by_user_id, title, category, "
-            "start_date, start_time) VALUES (:patient_id, :admin_id, 'Reminder', 'OTHER', "
-            "CURRENT_DATE, CURRENT_TIME) RETURNING reminder_template_id"
+            f"INSERT INTO reminder_templates ({template_columns}) VALUES ({template_values}) "
+            "RETURNING reminder_template_id"
         ),
-        {"patient_id": patient_id, "admin_id": admin_id},
+        params,
     ).scalar_one()
     occurrence_id = connection.execute(
         text(
@@ -152,7 +158,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "reminder_template_id", "patient_id", "created_by_user_id", "title",
             "category", "instructions", "priority", "start_date", "start_time",
             "schedule_rule", "snooze_allowed", "default_snooze_minutes",
-            "missed_after_minutes", "notification_channels", "status", "created_at",
+            "missed_after_minutes", "timezone", "due_after_minutes", "notification_channels", "status", "created_at",
             "updated_at", "archived_at",
         } == set(reminder_columns["reminder_templates"])
         assert {
@@ -168,7 +174,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "reminder_templates": {
                 "reminder_template_id", "patient_id", "created_by_user_id", "title",
                 "category", "priority", "start_date", "start_time", "snooze_allowed",
-                "default_snooze_minutes", "missed_after_minutes",
+                "default_snooze_minutes", "missed_after_minutes", "timezone", "due_after_minutes",
                 "notification_channels", "status", "created_at", "updated_at",
             },
             "reminder_occurrences": {
@@ -204,6 +210,9 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         assert str(reminder_columns["reminder_templates"]["priority"]["default"]) == "'NORMAL'::reminder_priority_enum"
         assert str(reminder_columns["reminder_templates"]["notification_channels"]["default"]) == "'IN_APP'::reminder_notification_channel_enum"
         assert str(reminder_columns["reminder_templates"]["status"]["default"]) == "'ACTIVE'::reminder_template_status_enum"
+        assert reminder_columns["reminder_templates"]["timezone"]["nullable"] is False
+        assert reminder_columns["reminder_templates"]["timezone"]["default"] is None
+        assert str(reminder_columns["reminder_templates"]["due_after_minutes"]["default"]) == "15"
         assert str(reminder_columns["reminder_occurrences"]["status"]["default"]) == "'UPCOMING'::reminder_occurrence_status_enum"
         assert all(
             "gen_random_uuid()" in str(reminder_columns[table_name][column]["default"])
@@ -291,6 +300,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                 "idx_reminder_occurrences_due_at",
                 "idx_reminder_occurrences_status",
                 "idx_reminder_occurrences_template_id",
+                "uq_reminder_occurrences_template_scheduled_at",
             },
             "reminder_actions": {
                 "idx_reminder_actions_occurrence_id",
@@ -364,6 +374,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         assert {
             "reminder_default_snooze_nonnegative",
             "reminder_missed_after_nonnegative",
+            "reminder_due_after_nonnegative",
         }.issubset(reminder_checks)
 
         with engine.connect() as connection:
@@ -565,6 +576,131 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                     "WHERE datname = :database_name AND pid <> pg_backend_pid()"
                 ),
                 {"database_name": database_name},
+            )
+            connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{database_name}"')
+        admin_engine.dispose()
+
+
+def test_reminder_scheduling_schema_migration(test_database_url):
+    base_url = make_url(test_database_url)
+    database_name = f"alera_reminder_schedule_{uuid4().hex[:10]}"
+    url = base_url.set(database=database_name)
+    admin_engine = create_engine(base_url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    with admin_engine.connect() as connection:
+        connection.exec_driver_sql(f'CREATE DATABASE "{database_name}"')
+    engine = create_engine(url)
+    try:
+        rendered_url = url.render_as_string(hide_password=False)
+        migrate(rendered_url, "upgrade", "a6e1b3c4d5f6")
+        with engine.begin() as connection:
+            occurrence_id, admin_id = insert_reminder_action_fixture(
+                connection, timezone=None
+            )
+            template_id, scheduled_at = connection.execute(
+                text(
+                    "SELECT reminder_template_id, scheduled_at FROM reminder_occurrences "
+                    "WHERE reminder_occurrence_id = :occurrence_id"
+                ),
+                {"occurrence_id": occurrence_id},
+            ).one()
+            patient_id = connection.execute(
+                text(
+                    "SELECT patient_id FROM reminder_templates "
+                    "WHERE reminder_template_id = :template_id"
+                ),
+                {"template_id": template_id},
+            ).scalar_one()
+        migrate(rendered_url, "upgrade", "head")
+        inspector = inspect(engine)
+        columns = {
+            column["name"]: column
+            for column in inspector.get_columns("reminder_templates")
+        }
+        assert columns["timezone"]["nullable"] is False
+        assert columns["timezone"]["default"] is None
+        assert str(columns["due_after_minutes"]["default"]) == "15"
+        assert {
+            "reminder_due_after_nonnegative"
+        }.issubset({
+            item["name"]
+            for item in inspector.get_check_constraints("reminder_templates")
+        })
+        index = next(
+            item
+            for item in inspector.get_indexes("reminder_occurrences")
+            if item["name"] == "uq_reminder_occurrences_template_scheduled_at"
+        )
+        assert index["unique"] is True
+        assert index["column_names"] == ["reminder_template_id", "scheduled_at"]
+        with engine.begin() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT timezone, due_after_minutes FROM reminder_templates "
+                    "WHERE reminder_template_id = :template_id"
+                ),
+                {"template_id": template_id},
+            ).one() == ("Asia/Manila", 15)
+            with pytest.raises(IntegrityError):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO reminder_occurrences "
+                            "(reminder_template_id, scheduled_at, due_at) "
+                            "VALUES (:template_id, :scheduled_at, :scheduled_at)"
+                        ),
+                        {"template_id": template_id, "scheduled_at": scheduled_at},
+                    )
+            second_template_id = connection.execute(
+                text(
+                    "INSERT INTO reminder_templates "
+                    "(patient_id, created_by_user_id, title, category, start_date, "
+                    "start_time, timezone) VALUES (:patient_id, :admin_id, 'Second', "
+                    "'OTHER', CURRENT_DATE, CURRENT_TIME, 'Asia/Manila') "
+                    "RETURNING reminder_template_id"
+                ),
+                {"patient_id": patient_id, "admin_id": admin_id},
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "INSERT INTO reminder_occurrences "
+                    "(reminder_template_id, scheduled_at, due_at) "
+                    "VALUES (:template_id, :scheduled_at, :scheduled_at)"
+                ),
+                {"template_id": second_template_id, "scheduled_at": scheduled_at},
+            )
+            with pytest.raises(IntegrityError):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO reminder_templates "
+                            "(patient_id, created_by_user_id, title, category, start_date, "
+                            "start_time, timezone, due_after_minutes) VALUES "
+                            "(:patient_id, :admin_id, 'Invalid', 'OTHER', CURRENT_DATE, "
+                            "CURRENT_TIME, 'Asia/Manila', -1)"
+                        ),
+                        {"patient_id": patient_id, "admin_id": admin_id},
+                    )
+        migrate(rendered_url, "downgrade", "a6e1b3c4d5f6")
+        downgraded = inspect(engine)
+        assert {"timezone", "due_after_minutes"}.isdisjoint(
+            {column["name"] for column in downgraded.get_columns("reminder_templates")}
+        )
+        assert "uq_reminder_occurrences_template_scheduled_at" not in {
+            item["name"] for item in downgraded.get_indexes("reminder_occurrences")
+        }
+        migrate(rendered_url, "upgrade", "head")
+        assert {"timezone", "due_after_minutes"}.issubset(
+            {column["name"] for column in inspect(engine).get_columns("reminder_templates")}
+        )
+    finally:
+        engine.dispose()
+        with admin_engine.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :name AND pid <> pg_backend_pid()"
+                ),
+                {"name": database_name},
             )
             connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{database_name}"')
         admin_engine.dispose()

@@ -70,6 +70,7 @@ def add_reminder(db_session, patient, creator, **template_overrides):
         priority=ReminderPriority.NORMAL,
         start_date=NOW.date(),
         start_time=NOW.time(),
+        timezone="Asia/Manila",
         **template_overrides,
     )
     db_session.add(template)
