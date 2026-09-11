@@ -7,7 +7,8 @@ from sqlalchemy import event
 from app.alerts.model import Alert, AlertStatus
 from app.event_evaluations.model import ConditionKey, EvaluationSeverity
 from app.health_events.model import HealthEvent, MetricType, ValidationStatus
-from app.household_access.model import CaregiverPatientAssignment
+from app.core.time import utc_now
+from app.household_access.model import CaregiverPatientAssignment, PatientAccessCode
 from app.households.model import HouseholdStatus
 from app.patients.model import ElderlyPatient, Sex
 from app.users.model import AccountStatus, User, UserRole
@@ -56,6 +57,32 @@ def assign(db, caregiver, patient, admin, *, ended=False):
     db.add(assignment)
     db.flush()
     return assignment
+
+
+def add_access_code(
+    db,
+    patient,
+    admin,
+    *,
+    created_at=None,
+    expires_at=None,
+    used_at=None,
+    revoked_at=None,
+):
+    now = utc_now()
+    code = PatientAccessCode(
+        patient_id=patient.patient_id,
+        code_hash="not-a-returnable-code-hash",
+        access_code_selector="SAFE",
+        created_by_user_id=admin.user_id,
+        created_at=created_at or now,
+        expires_at=expires_at or now + timedelta(hours=1),
+        used_at=used_at,
+        revoked_at=revoked_at,
+    )
+    db.add(code)
+    db.flush()
+    return code
 
 
 def add_event(
@@ -203,8 +230,6 @@ def test_detail_is_scoped_and_contains_full_safe_profile(api_app, db_session):
     assert body["monitoring_notes"] is None
     forbidden_names = {
         "password_hash",
-        "access_code",
-        "access_code_id",
         "access_code_selector",
         "code_hash",
         "access_token",
@@ -218,6 +243,170 @@ def test_detail_is_scoped_and_contains_full_safe_profile(api_app, db_session):
         f"/api/v1/patients/{scope['unassigned'].patient_id}",
         headers=headers(scope["caregiver"], scope["household"]),
     ).status_code == 404
+
+
+def test_detail_patient_access_is_not_connected_for_new_patient(api_app, db_session):
+    scope = setup_scope(db_session)
+
+    body = request(
+        api_app,
+        "GET",
+        f"/api/v1/patients/{scope['assigned'].patient_id}",
+        headers=headers(scope["caregiver"], scope["household"]),
+    ).json()
+
+    assert body["patient_access"] == {
+        "status": "NOT_CONNECTED",
+        "pending_access_code_id": None,
+        "pending_expires_at": None,
+        "connected_at": None,
+    }
+    admin_body = request(
+        api_app,
+        "GET",
+        f"/api/v1/patients/{scope['assigned'].patient_id}",
+        headers=headers(scope["admin"], scope["household"]),
+    ).json()
+    assert admin_body["patient_access"] == body["patient_access"]
+
+
+@pytest.mark.parametrize("state", ["expired", "revoked"])
+def test_detail_patient_access_ignores_unusable_invitations(
+    api_app, db_session, state
+):
+    scope = setup_scope(db_session)
+    now = utc_now()
+    add_access_code(
+        db_session,
+        scope["assigned"],
+        scope["admin"],
+        expires_at=now - timedelta(seconds=1) if state == "expired" else None,
+        revoked_at=now if state == "revoked" else None,
+    )
+    db_session.commit()
+
+    body = request(
+        api_app,
+        "GET",
+        f"/api/v1/patients/{scope['assigned'].patient_id}",
+        headers=headers(scope["caregiver"], scope["household"]),
+    ).json()
+
+    assert body["patient_access"] == {
+        "status": "NOT_CONNECTED",
+        "pending_access_code_id": None,
+        "pending_expires_at": None,
+        "connected_at": None,
+    }
+
+
+def test_detail_patient_access_returns_pending_invitation(api_app, db_session):
+    scope = setup_scope(db_session)
+    code = add_access_code(db_session, scope["assigned"], scope["admin"])
+    db_session.commit()
+
+    access = request(
+        api_app,
+        "GET",
+        f"/api/v1/patients/{scope['assigned'].patient_id}",
+        headers=headers(scope["caregiver"], scope["household"]),
+    ).json()["patient_access"]
+
+    assert access["status"] == "INVITE_PENDING"
+    assert access["pending_access_code_id"] == str(code.access_code_id)
+    assert datetime.fromisoformat(access["pending_expires_at"]) == code.expires_at
+    assert access["connected_at"] is None
+
+
+def test_detail_patient_access_connected_takes_precedence(api_app, db_session):
+    scope = setup_scope(db_session)
+    connected_at = utc_now() - timedelta(minutes=2)
+    add_access_code(
+        db_session, scope["assigned"], scope["admin"], used_at=connected_at
+    )
+    add_access_code(db_session, scope["assigned"], scope["admin"])
+    db_session.commit()
+
+    access = request(
+        api_app,
+        "GET",
+        f"/api/v1/patients/{scope['assigned'].patient_id}",
+        headers=headers(scope["caregiver"], scope["household"]),
+    ).json()["patient_access"]
+
+    assert access["status"] == "CONNECTED"
+    assert access["pending_access_code_id"] is None
+    assert access["pending_expires_at"] is None
+    assert datetime.fromisoformat(access["connected_at"]) == connected_at
+
+
+def test_detail_patient_access_uses_most_recent_redemption(api_app, db_session):
+    scope = setup_scope(db_session)
+    older = utc_now() - timedelta(minutes=2)
+    newer = utc_now() - timedelta(minutes=1)
+    add_access_code(db_session, scope["assigned"], scope["admin"], used_at=older)
+    add_access_code(db_session, scope["assigned"], scope["admin"], used_at=newer)
+    db_session.commit()
+
+    access = request(
+        api_app,
+        "GET",
+        f"/api/v1/patients/{scope['assigned'].patient_id}",
+        headers=headers(scope["caregiver"], scope["household"]),
+    ).json()["patient_access"]
+    assert datetime.fromisoformat(access["connected_at"]) == newer
+
+
+def test_detail_patient_access_selects_newest_usable_invitation(api_app, db_session):
+    scope = setup_scope(db_session)
+    created_at = utc_now() - timedelta(minutes=2)
+    older = add_access_code(
+        db_session, scope["assigned"], scope["admin"], created_at=created_at
+    )
+    newest = add_access_code(
+        db_session,
+        scope["assigned"],
+        scope["admin"],
+        created_at=created_at + timedelta(minutes=1),
+    )
+    db_session.commit()
+
+    access = request(
+        api_app,
+        "GET",
+        f"/api/v1/patients/{scope['assigned'].patient_id}",
+        headers=headers(scope["caregiver"], scope["household"]),
+    ).json()["patient_access"]
+    assert access["pending_access_code_id"] == str(newest.access_code_id)
+    assert access["pending_access_code_id"] != str(older.access_code_id)
+
+
+def test_patient_access_details_do_not_expose_sensitive_code_fields(api_app, db_session):
+    scope = setup_scope(db_session)
+    code = add_access_code(db_session, scope["assigned"], scope["admin"])
+    db_session.commit()
+
+    body = request(
+        api_app,
+        "GET",
+        f"/api/v1/patients/{scope['assigned'].patient_id}",
+        headers=headers(scope["caregiver"], scope["household"]),
+    ).json()
+
+    assert body["patient_access"]["pending_access_code_id"] == str(code.access_code_id)
+    assert {"code_hash", "access_code_selector", "created_by_user_id"}.isdisjoint(
+        body["patient_access"]
+    )
+    assert "not-a-returnable-code-hash" not in str(body)
+
+
+def test_patient_list_does_not_include_patient_access(api_app, db_session):
+    scope = setup_scope(db_session)
+    add_access_code(db_session, scope["assigned"], scope["admin"])
+    db_session.commit()
+
+    body = get_list(api_app, scope["caregiver"], scope["household"]).json()
+    assert "patient_access" not in body["items"][0]
 
 
 def test_patient_role_is_forbidden_and_disabled_actors_are_unauthorized(

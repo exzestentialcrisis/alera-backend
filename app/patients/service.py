@@ -6,10 +6,12 @@ from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import Session
 
 from app.alerts.model import Alert, AlertStatus
+from app.core.time import utc_now
 from app.event_evaluations.model import EvaluationSeverity
 from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 from app.household_access.errors import AccessForbiddenError
 from app.household_access.model import CaregiverPatientAssignment
+from app.household_access.model import PatientAccessCode
 from app.households.model import Household, HouseholdStatus
 from app.patients.errors import PatientNotFoundError
 from app.patients.model import ElderlyPatient
@@ -19,6 +21,8 @@ from app.patients.schema import (
     MonitoringStatus,
     PatientCreate,
     PatientCreated,
+    PatientAccessStatus,
+    PatientAccessSummary,
     MonitoringSettingsResponse,
     MonitoringSettingsUpdate,
     ThresholdMode,
@@ -40,6 +44,7 @@ class PatientReadRow:
     user: User
     assignment: CaregiverPatientAssignment | None
     current_summary: CurrentHealthSummary
+    patient_access: PatientAccessSummary | None = None
 
 
 def _patient_scope(actor: User) -> Select:
@@ -239,6 +244,69 @@ def get_patient(db: Session, actor: User, patient_id: UUID) -> PatientReadRow:
         user,
         assignment,
         _summary_map(db, [patient])[patient_id],
+        _patient_access_summary(db, patient_id),
+    )
+
+
+def _patient_access_summary(db: Session, patient_id: UUID) -> PatientAccessSummary:
+    """Return only the code metadata safe and necessary for Patient Detail."""
+    now = utc_now()
+    newest_usable = (
+        select(
+            PatientAccessCode.access_code_id.label("access_code_id"),
+            PatientAccessCode.expires_at.label("expires_at"),
+            func.row_number()
+            .over(
+                order_by=(
+                    PatientAccessCode.created_at.desc(),
+                    PatientAccessCode.access_code_id.desc(),
+                )
+            )
+            .label("position"),
+        )
+        .where(
+            PatientAccessCode.patient_id == patient_id,
+            PatientAccessCode.used_at.is_(None),
+            PatientAccessCode.revoked_at.is_(None),
+            PatientAccessCode.expires_at > now,
+        )
+        .subquery()
+    )
+    access = db.execute(
+        select(
+            select(func.max(PatientAccessCode.used_at))
+            .where(PatientAccessCode.patient_id == patient_id)
+            .scalar_subquery()
+            .label("connected_at"),
+            select(newest_usable.c.access_code_id)
+            .where(newest_usable.c.position == 1)
+            .scalar_subquery()
+            .label("pending_access_code_id"),
+            select(newest_usable.c.expires_at)
+            .where(newest_usable.c.position == 1)
+            .scalar_subquery()
+            .label("pending_expires_at"),
+        )
+    ).one()
+    if access.connected_at is not None:
+        return PatientAccessSummary(
+            status=PatientAccessStatus.CONNECTED,
+            pending_access_code_id=None,
+            pending_expires_at=None,
+            connected_at=access.connected_at,
+        )
+    if access.pending_access_code_id is not None:
+        return PatientAccessSummary(
+            status=PatientAccessStatus.INVITE_PENDING,
+            pending_access_code_id=access.pending_access_code_id,
+            pending_expires_at=access.pending_expires_at,
+            connected_at=None,
+        )
+    return PatientAccessSummary(
+        status=PatientAccessStatus.NOT_CONNECTED,
+        pending_access_code_id=None,
+        pending_expires_at=None,
+        connected_at=None,
     )
 
 
@@ -259,6 +327,7 @@ def patient_read_payload(row: PatientReadRow, *, detail: bool) -> dict:
     }
     if detail:
         payload.update(
+            patient_access=row.patient_access,
             emergency_contact_name=patient.emergency_contact_name,
             emergency_contact_phone=patient.emergency_contact_phone,
             known_conditions=patient.known_conditions,

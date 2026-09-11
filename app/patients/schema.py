@@ -92,8 +92,28 @@ class ThresholdMode(str, enum.Enum):
     CUSTOM = "CUSTOM"
 
 
+class PatientAccessStatus(str, enum.Enum):
+    NOT_CONNECTED = "NOT_CONNECTED"
+    INVITE_PENDING = "INVITE_PENDING"
+    CONNECTED = "CONNECTED"
+
+
+class PatientAccessSummary(BaseModel):
+    """Enrollment state derived from patient access-code records.
+
+    CONNECTED means the patient successfully redeemed an access code; it does
+    not describe smartwatch connectivity or sync state.
+    """
+
+    status: PatientAccessStatus
+    pending_access_code_id: UUID | None
+    pending_expires_at: datetime | None
+    connected_at: datetime | None
+
+
 class PatientDetail(PatientCreated):
     current_summary: CurrentHealthSummary
+    patient_access: PatientAccessSummary
     normal_hr_min: int
     normal_hr_max: int
     usual_spo2_min: int
