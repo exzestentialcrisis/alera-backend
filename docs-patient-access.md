@@ -33,6 +33,21 @@ non-archived patient; patients are denied. Existing code issuance revokes unused
 codes. Assignment/unassignment administration retains its Phase 9A behavior.
 Revoking/resetting an enrollment code does not revoke an already-issued JWT.
 
+## Caregiver-visible enrollment status
+
+`GET /api/v1/patients/{patient_id}` includes a `patient_access` object for an
+in-scope caregiver or care administrator. It contains `status`,
+`pending_access_code_id`, `pending_expires_at`, and `connected_at`; it never
+includes a plaintext code, hash, selector, creator ID, or code history.
+
+`NOT_CONNECTED` means no code has been redeemed and no usable invitation is
+available. `INVITE_PENDING` means no code has been redeemed and the newest
+unrevoked, unused, unexpired invitation is shown by ID and expiry.
+`CONNECTED` means the patient successfully redeemed an access code, with the
+most recent redemption time in `connected_at`; it takes precedence over any
+pending invitation. It does **not** mean that a smartwatch is connected or
+actively syncing.
+
 ## Explicit development demo issuance
 
 The patient `a076ecdb-ae38-4f84-b490-e714977027ee` and its active household owner
