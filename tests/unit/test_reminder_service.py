@@ -18,7 +18,12 @@ from app.reminders.errors import (
 from app.reminders.errors import ReminderQueryValidationError
 from app.reminders.model import ReminderOccurrence, ReminderTemplate
 from app.reminders.service import reminder_occurrence_payload, validate_reminder_time_range
-from app.reminders.schema import ReminderCompleteRequest, ReminderSnoozeRequest
+from app.reminders.schema import (
+    ReminderCancelRequest,
+    ReminderCaregiverCompleteRequest,
+    ReminderCompleteRequest,
+    ReminderSnoozeRequest,
+)
 from app.users.model import User, UserRole
 
 
@@ -126,3 +131,14 @@ def test_patient_action_requests_normalize_notes_and_validate_snooze_bounds():
         ReminderSnoozeRequest(client_action_id=action_id, snooze_minutes=0)
     with pytest.raises(ValidationError):
         ReminderCompleteRequest(client_action_id=action_id, note="x" * 1001)
+
+
+@pytest.mark.parametrize(
+    "request_type", [ReminderCaregiverCompleteRequest, ReminderCancelRequest]
+)
+def test_caregiver_mutation_requests_require_nonblank_normalized_notes(request_type):
+    action_id = uuid4()
+    assert request_type(client_action_id=action_id, note="  explanation  ").note == "explanation"
+    for invalid in ("   ", "x" * 1001):
+        with pytest.raises(ValidationError):
+            request_type(client_action_id=action_id, note=invalid)

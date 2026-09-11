@@ -41,6 +41,37 @@ class ReminderSnoozeRequest(ReminderActionRequest):
     snooze_minutes: int | None = Field(default=None, ge=1, le=1440)
 
 
+class ReminderCareNoteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_action_id: UUID
+    note: str
+
+    @field_validator("note")
+    @classmethod
+    def require_note(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("note must not be blank")
+        if len(value) > REMINDER_ACTION_NOTE_MAX_LENGTH:
+            raise ValueError(
+                f"note must not exceed {REMINDER_ACTION_NOTE_MAX_LENGTH} characters"
+            )
+        return value
+
+
+class ReminderCaregiverCompleteRequest(ReminderCareNoteRequest):
+    pass
+
+
+class ReminderCancelRequest(ReminderCareNoteRequest):
+    pass
+
+
+class ReminderMissedHandledRequest(ReminderActionRequest):
+    pass
+
+
 class ReminderOccurrenceRead(BaseModel):
     reminder_occurrence_id: UUID
     reminder_template_id: UUID
@@ -66,7 +97,7 @@ class ReminderOccurrenceListResponse(BaseModel):
 
 class ReminderActionRead(BaseModel):
     reminder_action_id: UUID
-    client_action_id: UUID
+    client_action_id: UUID | None
     reminder_occurrence_id: UUID
     performed_by_user_id: UUID
     action_type: ReminderActionType
@@ -82,3 +113,10 @@ class ReminderActionResponse(BaseModel):
     reminder: ReminderOccurrenceRead
     action: ReminderActionRead
     idempotent: bool
+
+
+class ReminderActionHistoryResponse(BaseModel):
+    items: list[ReminderActionRead]
+    total: int
+    limit: int
+    offset: int

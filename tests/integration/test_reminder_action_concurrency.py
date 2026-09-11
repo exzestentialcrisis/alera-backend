@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.households.model import Household
+from app.household_access.model import CaregiverPatientAssignment
 from app.reminders.enums import (
     ReminderActionType,
     ReminderCategory,
@@ -16,8 +17,14 @@ from app.reminders.enums import (
 )
 from app.reminders.errors import ReminderActionConflictError
 from app.reminders.model import ReminderAction, ReminderOccurrence, ReminderTemplate
-from app.reminders.service import complete_reminder, snooze_reminder
-from app.users.model import User
+from app.reminders.service import (
+    cancel_reminder,
+    complete_reminder,
+    complete_reminder_on_behalf,
+    record_caregiver_reminder_action,
+    snooze_reminder,
+)
+from app.users.model import User, UserRole
 
 
 pytestmark = pytest.mark.integration
@@ -144,3 +151,108 @@ def test_concurrent_same_snooze_extends_once(integration_engine, db_session, pat
         )
     )
     assert action.action_metadata["snooze_minutes"] == 15
+
+
+def test_concurrent_missed_handled_allows_one_caregiver_action(
+    integration_engine, db_session, patient
+):
+    occurrence_id = make_occurrence(db_session, patient)
+    occurrence = db_session.get(ReminderOccurrence, occurrence_id)
+    occurrence.status = ReminderOccurrenceStatus.MISSED
+    household = db_session.get(Household, patient.household_id)
+    owner = db_session.get(User, household.created_by_user_id)
+    caregiver = User(full_name="Concurrent caregiver", role=UserRole.CAREGIVER)
+    db_session.add(caregiver)
+    db_session.flush()
+    db_session.add(CaregiverPatientAssignment(
+        caregiver_user_id=caregiver.user_id,
+        patient_id=patient.patient_id,
+        assigned_by_user_id=owner.user_id,
+    ))
+    db_session.commit()
+
+    factory = sessionmaker(bind=integration_engine, expire_on_commit=False)
+    barrier = Barrier(2)
+
+    def worker(actor_id, action_id):
+        session = factory()
+        try:
+            actor = session.get(User, actor_id)
+            barrier.wait()
+            record_caregiver_reminder_action(
+                session,
+                actor=actor,
+                occurrence_id=occurrence_id,
+                client_action_id=action_id,
+                action_type=ReminderActionType.MARK_MISSED_HANDLED,
+                note=None,
+                at=ACTION_TIME,
+            )
+            session.commit()
+            return "success"
+        except ReminderActionConflictError:
+            session.rollback()
+            return "conflict"
+        finally:
+            session.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(
+            lambda values: worker(*values),
+            [(owner.user_id, uuid4()), (caregiver.user_id, uuid4())],
+        ))
+    assert sorted(results) == ["conflict", "success"]
+
+
+def test_caregiver_terminal_actions_are_serialized(integration_engine, db_session, patient):
+    occurrence_id = make_occurrence(db_session, patient)
+    household = db_session.get(Household, patient.household_id)
+    owner = db_session.get(User, household.created_by_user_id)
+    caregivers = [
+        User(full_name=f"Concurrent caregiver {index}", role=UserRole.CAREGIVER)
+        for index in range(2)
+    ]
+    db_session.add_all(caregivers)
+    db_session.flush()
+    db_session.add_all([
+        CaregiverPatientAssignment(
+            caregiver_user_id=caregiver.user_id,
+            patient_id=patient.patient_id,
+            assigned_by_user_id=owner.user_id,
+        )
+        for caregiver in caregivers
+    ])
+    db_session.commit()
+    factory = sessionmaker(bind=integration_engine, expire_on_commit=False)
+    barrier = Barrier(2)
+
+    def worker(actor_id, action_id, operation):
+        session = factory()
+        try:
+            actor = session.get(User, actor_id)
+            barrier.wait()
+            operation(session, actor, occurrence_id, action_id)
+            session.commit()
+            return "success"
+        except ReminderActionConflictError:
+            session.rollback()
+            return "conflict"
+        finally:
+            session.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(
+            lambda values: worker(*values),
+            [
+                (caregivers[0].user_id, uuid4(), lambda session, actor, occurrence, action_id: complete_reminder_on_behalf(session, actor=actor, occurrence_id=occurrence, client_action_id=action_id, note="completed", at=ACTION_TIME)),
+                (caregivers[1].user_id, uuid4(), lambda session, actor, occurrence, action_id: cancel_reminder(session, actor=actor, occurrence_id=occurrence, client_action_id=action_id, note="canceled", at=ACTION_TIME)),
+            ],
+        ))
+    assert sorted(results) == ["conflict", "success"]
+    assert db_session.scalar(select(func.count()).select_from(ReminderAction).where(
+        ReminderAction.reminder_occurrence_id == occurrence_id
+    )) == 1
+    assert db_session.get(ReminderOccurrence, occurrence_id).status in {
+        ReminderOccurrenceStatus.COMPLETED,
+        ReminderOccurrenceStatus.CANCELED,
+    }
