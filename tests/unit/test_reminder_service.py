@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from app.reminders.enums import (
     ReminderCategory,
@@ -17,6 +18,7 @@ from app.reminders.errors import (
 from app.reminders.errors import ReminderQueryValidationError
 from app.reminders.model import ReminderOccurrence, ReminderTemplate
 from app.reminders.service import reminder_occurrence_payload, validate_reminder_time_range
+from app.reminders.schema import ReminderCompleteRequest, ReminderSnoozeRequest
 from app.users.model import User, UserRole
 
 
@@ -109,3 +111,18 @@ def test_reminder_payload_uses_only_the_public_joined_fields():
         "default_snooze_minutes": None,
         "missed_after_minutes": None,
     }
+
+
+def test_patient_action_requests_normalize_notes_and_validate_snooze_bounds():
+    action_id = uuid4()
+    assert ReminderCompleteRequest(
+        client_action_id=action_id, note="  completed  "
+    ).note == "completed"
+    assert ReminderCompleteRequest(client_action_id=action_id, note="   ").note is None
+    assert ReminderSnoozeRequest(
+        client_action_id=action_id, snooze_minutes=1
+    ).snooze_minutes == 1
+    with pytest.raises(ValidationError):
+        ReminderSnoozeRequest(client_action_id=action_id, snooze_minutes=0)
+    with pytest.raises(ValidationError):
+        ReminderCompleteRequest(client_action_id=action_id, note="x" * 1001)
