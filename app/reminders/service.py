@@ -133,6 +133,29 @@ def get_reminder_occurrence(
     return row
 
 
+def list_reminder_actions(
+    db: Session, *, actor: User, occurrence_id: UUID, limit: int, offset: int
+) -> tuple[list[ReminderAction], int]:
+    get_reminder_occurrence(db, actor=actor, occurrence_id=occurrence_id)
+    filters = [ReminderAction.reminder_occurrence_id == occurrence_id]
+    total = db.scalar(
+        select(func.count(ReminderAction.reminder_action_id)).where(*filters)
+    ) or 0
+    actions = list(
+        db.scalars(
+            select(ReminderAction)
+            .where(*filters)
+            .order_by(
+                ReminderAction.performed_at.asc(),
+                ReminderAction.reminder_action_id.asc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    return actions, total
+
+
 def reminder_occurrence_payload(
     occurrence: ReminderOccurrence,
     template: ReminderTemplate,
@@ -194,6 +217,29 @@ def _locked_patient_occurrence(
             ElderlyPatient.archived_at.is_(None),
             Household.household_status == HouseholdStatus.ACTIVE,
             Household.archived_at.is_(None),
+        )
+        .with_for_update(of=ReminderOccurrence)
+    ).one_or_none()
+    if row is None:
+        raise ReminderNotFoundError("Reminder occurrence not found.")
+    return row
+
+
+def _locked_caregiver_occurrence(
+    db: Session, *, actor: User, occurrence_id: UUID
+) -> ReminderRow:
+    if actor.role not in {UserRole.CAREGIVER, UserRole.CARE_ADMIN}:
+        raise ReminderAccessForbiddenError("Caregiver access is required for this action.")
+    row = db.execute(
+        select(ReminderOccurrence, ReminderTemplate)
+        .join(
+            ReminderTemplate,
+            ReminderOccurrence.reminder_template_id
+            == ReminderTemplate.reminder_template_id,
+        )
+        .where(
+            ReminderOccurrence.reminder_occurrence_id == occurrence_id,
+            ReminderTemplate.patient_id.in_(visible_patient_ids(actor)),
         )
         .with_for_update(of=ReminderOccurrence)
     ).one_or_none()
@@ -404,4 +450,66 @@ def snooze_reminder(
     occurrence.status = ReminderOccurrenceStatus.SNOOZED
     occurrence.due_at = new_due_at
     occurrence.updated_at = action_time
+    return occurrence, template, action, False
+
+
+def record_caregiver_reminder_action(
+    db: Session,
+    *,
+    actor: User,
+    occurrence_id: UUID,
+    client_action_id: UUID,
+    action_type: ReminderActionType,
+    note: str | None,
+    at: datetime | None = None,
+) -> ReminderActionResult:
+    occurrence, template = _locked_caregiver_occurrence(
+        db, actor=actor, occurrence_id=occurrence_id
+    )
+    replay = _replay_or_conflict(
+        _existing_action(db, client_action_id=client_action_id),
+        actor=actor,
+        occurrence=occurrence,
+        action_type=action_type,
+        note=note,
+        snooze_minutes=None,
+    )
+    if replay is not None:
+        return occurrence, template, replay, True
+    if action_type is ReminderActionType.MARK_MISSED_HANDLED:
+        if occurrence.status is not ReminderOccurrenceStatus.MISSED:
+            raise ReminderActionConflictError("Only missed reminders can be marked handled.")
+        already_handled = db.scalar(
+            select(ReminderAction.reminder_action_id).where(
+                ReminderAction.reminder_occurrence_id
+                == occurrence.reminder_occurrence_id,
+                ReminderAction.action_type == ReminderActionType.MARK_MISSED_HANDLED,
+            )
+        )
+        if already_handled is not None:
+            raise ReminderActionConflictError("Missed reminder was already handled.")
+    action_time = at or utc_now()
+    action = ReminderAction(
+        client_action_id=client_action_id,
+        reminder_occurrence_id=occurrence.reminder_occurrence_id,
+        performed_by_user_id=actor.user_id,
+        action_type=action_type,
+        action_note=note,
+        previous_status=occurrence.status,
+        new_status=occurrence.status,
+        new_due_at=None,
+        action_metadata={},
+        performed_at=action_time,
+    )
+    replay = _insert_action_safely(
+        db,
+        action=action,
+        actor=actor,
+        occurrence=occurrence,
+        action_type=action_type,
+        note=note,
+        snooze_minutes=None,
+    )
+    if replay is not None:
+        return occurrence, template, replay, True
     return occurrence, template, action, False

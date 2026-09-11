@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_actor
 from app.db.database import get_db
-from app.reminders.enums import ReminderCategory, ReminderOccurrenceStatus
+from app.reminders.enums import (
+    ReminderActionType,
+    ReminderCategory,
+    ReminderOccurrenceStatus,
+)
 from app.reminders.errors import (
     ReminderAccessForbiddenError,
     ReminderNotFoundError,
@@ -20,6 +24,9 @@ from app.reminders.schema import (
     ReminderActionResponse,
     ReminderCompleteRequest,
     ReminderSnoozeRequest,
+    ReminderCareNoteRequest,
+    ReminderMissedHandledRequest,
+    ReminderActionHistoryResponse,
 )
 from app.reminders.service import (
     get_reminder_occurrence,
@@ -28,6 +35,8 @@ from app.reminders.service import (
     reminder_action_payload,
     complete_reminder,
     snooze_reminder,
+    list_reminder_actions,
+    record_caregiver_reminder_action,
 )
 from app.users.model import User
 
@@ -101,6 +110,24 @@ async def get_reminder(
     return reminder_occurrence_payload(occurrence, template)
 
 
+@router.get("/{occurrence_id}/actions", response_model=ReminderActionHistoryResponse)
+async def get_reminder_actions(
+    occurrence_id: UUID,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    actor: User = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    try:
+        items, total = list_reminder_actions(
+            db, actor=actor, occurrence_id=occurrence_id, limit=limit, offset=offset
+        )
+    except ReminderNotFoundError as exc:
+        _raise_http_error(exc)
+        raise AssertionError("unreachable")
+    return {"items": [reminder_action_payload(action) for action in items], "total": total, "limit": limit, "offset": offset}
+
+
 def _run_patient_action(db: Session, operation) -> dict:
     try:
         occurrence, template, action, idempotent = operation()
@@ -153,5 +180,60 @@ async def snooze(
             client_action_id=payload.client_action_id,
             snooze_minutes=payload.snooze_minutes,
             note=payload.note,
+        ),
+    )
+
+
+def _run_caregiver_action(db: Session, operation) -> dict:
+    return _run_patient_action(db, operation)
+
+
+@router.post("/{occurrence_id}/notes", response_model=ReminderActionResponse)
+async def add_note(
+    occurrence_id: UUID,
+    payload: ReminderCareNoteRequest,
+    actor: User = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    return _run_caregiver_action(
+        db,
+        lambda: record_caregiver_reminder_action(
+            db, actor=actor, occurrence_id=occurrence_id,
+            client_action_id=payload.client_action_id,
+            action_type=ReminderActionType.ADD_NOTE, note=payload.note,
+        ),
+    )
+
+
+@router.post("/{occurrence_id}/follow-ups", response_model=ReminderActionResponse)
+async def follow_up(
+    occurrence_id: UUID,
+    payload: ReminderCareNoteRequest,
+    actor: User = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    return _run_caregiver_action(
+        db,
+        lambda: record_caregiver_reminder_action(
+            db, actor=actor, occurrence_id=occurrence_id,
+            client_action_id=payload.client_action_id,
+            action_type=ReminderActionType.FOLLOW_UP, note=payload.note,
+        ),
+    )
+
+
+@router.post("/{occurrence_id}/missed/handle", response_model=ReminderActionResponse)
+async def mark_missed_handled(
+    occurrence_id: UUID,
+    payload: ReminderMissedHandledRequest,
+    actor: User = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    return _run_caregiver_action(
+        db,
+        lambda: record_caregiver_reminder_action(
+            db, actor=actor, occurrence_id=occurrence_id,
+            client_action_id=payload.client_action_id,
+            action_type=ReminderActionType.MARK_MISSED_HANDLED, note=payload.note,
         ),
     )
