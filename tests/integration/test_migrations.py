@@ -81,7 +81,78 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "caregiver_patient_assignments",
             "patient_access_codes",
             "caregiver_push_devices",
+            "reminder_templates",
+            "reminder_occurrences",
+            "reminder_actions",
         }.issubset(inspector.get_table_names())
+
+        reminder_columns = {
+            table_name: {
+                column["name"]: column
+                for column in inspector.get_columns(table_name)
+            }
+            for table_name in (
+                "reminder_templates",
+                "reminder_occurrences",
+                "reminder_actions",
+            )
+        }
+        assert {
+            "reminder_template_id", "patient_id", "created_by_user_id", "title",
+            "category", "instructions", "priority", "start_date", "start_time",
+            "schedule_rule", "snooze_allowed", "default_snooze_minutes",
+            "missed_after_minutes", "notification_channels", "status", "created_at",
+            "updated_at", "archived_at",
+        } == set(reminder_columns["reminder_templates"])
+        assert {
+            "reminder_occurrence_id", "reminder_template_id", "scheduled_at",
+            "due_at", "status", "created_at", "updated_at",
+        } == set(reminder_columns["reminder_occurrences"])
+        assert {
+            "reminder_action_id", "reminder_occurrence_id", "performed_by_user_id",
+            "action_type", "action_note", "previous_status", "new_status",
+            "new_due_at", "metadata", "performed_at",
+        } == set(reminder_columns["reminder_actions"])
+        for table_name, required_columns in {
+            "reminder_templates": {
+                "reminder_template_id", "patient_id", "created_by_user_id", "title",
+                "category", "priority", "start_date", "start_time", "snooze_allowed",
+                "default_snooze_minutes", "missed_after_minutes",
+                "notification_channels", "status", "created_at", "updated_at",
+            },
+            "reminder_occurrences": {
+                "reminder_occurrence_id", "reminder_template_id", "scheduled_at",
+                "due_at", "status", "created_at", "updated_at",
+            },
+            "reminder_actions": {
+                "reminder_action_id", "reminder_occurrence_id", "performed_by_user_id",
+                "action_type", "performed_at",
+            },
+        }.items():
+            assert all(
+                reminder_columns[table_name][column]["nullable"] is False
+                for column in required_columns
+            )
+        assert all(
+            reminder_columns["reminder_templates"][column]["nullable"] is True
+            for column in ("instructions", "schedule_rule", "archived_at")
+        )
+        assert all(
+            reminder_columns["reminder_actions"][column]["nullable"] is True
+            for column in ("action_note", "previous_status", "new_status", "new_due_at", "metadata")
+        )
+        assert str(reminder_columns["reminder_templates"]["priority"]["default"]) == "'NORMAL'::reminder_priority_enum"
+        assert str(reminder_columns["reminder_templates"]["notification_channels"]["default"]) == "'IN_APP'::reminder_notification_channel_enum"
+        assert str(reminder_columns["reminder_templates"]["status"]["default"]) == "'ACTIVE'::reminder_template_status_enum"
+        assert str(reminder_columns["reminder_occurrences"]["status"]["default"]) == "'UPCOMING'::reminder_occurrence_status_enum"
+        assert all(
+            "gen_random_uuid()" in str(reminder_columns[table_name][column]["default"])
+            for table_name, column in (
+                ("reminder_templates", "reminder_template_id"),
+                ("reminder_occurrences", "reminder_occurrence_id"),
+                ("reminder_actions", "reminder_action_id"),
+            )
+        )
 
         with engine.connect() as connection:
             household_codes = connection.execute(
@@ -116,6 +187,23 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         assert foreign_key_exists(
             "event_evaluations", ["alert_id"], "alerts", ["alert_id"]
         )
+        assert foreign_key_exists(
+            "reminder_templates", ["patient_id"], "elderly_patients", ["patient_id"]
+        )
+        assert foreign_key_exists(
+            "reminder_templates", ["created_by_user_id"], "users", ["user_id"]
+        )
+        assert foreign_key_exists(
+            "reminder_occurrences", ["reminder_template_id"], "reminder_templates",
+            ["reminder_template_id"],
+        )
+        assert foreign_key_exists(
+            "reminder_actions", ["reminder_occurrence_id"], "reminder_occurrences",
+            ["reminder_occurrence_id"],
+        )
+        assert foreign_key_exists(
+            "reminder_actions", ["performed_by_user_id"], "users", ["user_id"]
+        )
 
         assert foreign_key_exists(
             "caregiver_push_devices", ["user_id"], "users", ["user_id"]
@@ -134,6 +222,20 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             },
             "alert_actions": {"ix_alert_actions_alert_performed_at"},
             "event_evaluations": {"ix_event_evaluations_alert_id"},
+            "reminder_templates": {
+                "idx_reminder_templates_created_by",
+                "idx_reminder_templates_patient_id",
+                "idx_reminder_templates_status",
+            },
+            "reminder_occurrences": {
+                "idx_reminder_occurrences_due_at",
+                "idx_reminder_occurrences_status",
+                "idx_reminder_occurrences_template_id",
+            },
+            "reminder_actions": {
+                "idx_reminder_actions_occurrence_id",
+                "idx_reminder_actions_performed_by",
+            },
         }
         for table_name, names in expected_indexes.items():
             assert names.issubset(
@@ -187,6 +289,14 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "ck_patient_spo2_max_range",
             "ck_patient_spo2_range_order",
         }.issubset(checks)
+        reminder_checks = {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("reminder_templates")
+        }
+        assert {
+            "reminder_default_snooze_nonnegative",
+            "reminder_missed_after_nonnegative",
+        }.issubset(reminder_checks)
 
         with engine.connect() as connection:
             metric_values = set(
@@ -214,6 +324,22 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                     "ORDER BY pg_enum.enumsortorder"
                 )
             ).scalars().all()
+            reminder_enums = {
+                type_name: connection.execute(
+                    text(
+                        "SELECT enumlabel FROM pg_enum "
+                        "JOIN pg_type ON pg_type.oid = pg_enum.enumtypid "
+                        "WHERE pg_type.typname = :type_name "
+                        "ORDER BY pg_enum.enumsortorder"
+                    ),
+                    {"type_name": type_name},
+                ).scalars().all()
+                for type_name in (
+                    "reminder_category_enum", "reminder_priority_enum",
+                    "reminder_template_status_enum", "reminder_occurrence_status_enum",
+                    "reminder_action_type_enum", "reminder_notification_channel_enum",
+                )
+            }
             partial_index = connection.execute(
                 text(
                     "SELECT indexdef FROM pg_indexes "
@@ -241,6 +367,29 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         assert "UNIQUE" in partial_index
         assert "ACTIVE" in partial_index
         assert "ACKNOWLEDGED" in partial_index
+
+        assert reminder_enums == {
+            "reminder_category_enum": ["MEDICATION", "HEALTH_CHECK", "HYDRATION", "MEAL", "MOBILITY", "APPOINTMENT", "CHECK_IN", "DEVICE_TASK", "OTHER"],
+            "reminder_priority_enum": ["LOW", "NORMAL", "HIGH"],
+            "reminder_template_status_enum": ["ACTIVE", "DISABLED", "ARCHIVED"],
+            "reminder_occurrence_status_enum": ["UPCOMING", "DUE", "SNOOZED", "COMPLETED", "MISSED", "CANCELED", "COMPLETED_LATE"],
+            "reminder_action_type_enum": ["MARK_COMPLETED", "SNOOZE", "REQUEST_HELP", "CAREGIVER_OVERRIDE", "MARK_MISSED", "MARK_MISSED_HANDLED", "RESCHEDULE", "CANCEL", "ADD_NOTE", "FOLLOW_UP"],
+            "reminder_notification_channel_enum": ["IN_APP", "PUSH", "SMS"],
+        }
+
+        migrate(temporary_url.render_as_string(hide_password=False), "downgrade", "c8d4e52f6b91")
+        downgraded_inspector = inspect(engine)
+        assert not {"reminder_templates", "reminder_occurrences", "reminder_actions"}.intersection(
+            downgraded_inspector.get_table_names()
+        )
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT typname FROM pg_type WHERE typname LIKE "
+                    "'reminder_%_enum'"
+                )
+            ).scalars().all() == []
+        migrate(temporary_url.render_as_string(hide_password=False), "upgrade", "head")
 
         migrate(
             temporary_url.render_as_string(hide_password=False),
