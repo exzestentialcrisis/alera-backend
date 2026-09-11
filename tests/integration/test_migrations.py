@@ -7,6 +7,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import get_settings
 pytestmark = pytest.mark.integration
@@ -26,6 +27,56 @@ def migrate(database_url, operation, revision):
         else:
             os.environ["DATABASE_URL"] = previous
         get_settings.cache_clear()
+
+
+def insert_reminder_action_fixture(connection):
+    admin_id, patient_user_id, household_id, patient_id = (uuid4() for _ in range(4))
+    connection.execute(
+        text(
+            "INSERT INTO users (user_id, full_name, role, account_status, created_at, updated_at) "
+            "VALUES (:admin_id, 'Reminder Admin', 'CARE_ADMIN', 'ACTIVE', now(), now()), "
+            "(:patient_user_id, 'Reminder Patient', 'ELDERLY_PATIENT', 'ACTIVE', now(), now())"
+        ),
+        {"admin_id": admin_id, "patient_user_id": patient_user_id},
+    )
+    connection.execute(
+        text(
+            "INSERT INTO households (household_id, created_by_user_id, household_name, "
+            "household_code, household_status, created_at, updated_at) "
+            "VALUES (:household_id, :admin_id, 'Reminder Home', 'RMD1-ACTN', "
+            "'ACTIVE', now(), now())"
+        ),
+        {"household_id": household_id, "admin_id": admin_id},
+    )
+    connection.execute(
+        text(
+            "INSERT INTO elderly_patients (patient_id, user_id, household_id, normal_hr_min, "
+            "normal_hr_max, usual_spo2_min, health_platform, integration_status, created_at, "
+            "updated_at) VALUES (:patient_id, :patient_user_id, :household_id, 60, 100, 95, "
+            "'SIMULATOR', 'NOT_CONNECTED', now(), now())"
+        ),
+        {
+            "patient_id": patient_id,
+            "patient_user_id": patient_user_id,
+            "household_id": household_id,
+        },
+    )
+    template_id = connection.execute(
+        text(
+            "INSERT INTO reminder_templates (patient_id, created_by_user_id, title, category, "
+            "start_date, start_time) VALUES (:patient_id, :admin_id, 'Reminder', 'OTHER', "
+            "CURRENT_DATE, CURRENT_TIME) RETURNING reminder_template_id"
+        ),
+        {"patient_id": patient_id, "admin_id": admin_id},
+    ).scalar_one()
+    occurrence_id = connection.execute(
+        text(
+            "INSERT INTO reminder_occurrences (reminder_template_id, scheduled_at, due_at) "
+            "VALUES (:template_id, now(), now()) RETURNING reminder_occurrence_id"
+        ),
+        {"template_id": template_id},
+    ).scalar_one()
+    return occurrence_id, admin_id
 
 
 def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
@@ -111,7 +162,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         assert {
             "reminder_action_id", "reminder_occurrence_id", "performed_by_user_id",
             "action_type", "action_note", "previous_status", "new_status",
-            "new_due_at", "metadata", "performed_at",
+            "new_due_at", "metadata", "performed_at", "client_action_id",
         } == set(reminder_columns["reminder_actions"])
         for table_name, required_columns in {
             "reminder_templates": {
@@ -139,8 +190,17 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         )
         assert all(
             reminder_columns["reminder_actions"][column]["nullable"] is True
-            for column in ("action_note", "previous_status", "new_status", "new_due_at", "metadata")
+            for column in (
+                "action_note", "previous_status", "new_status", "new_due_at",
+                "metadata", "client_action_id",
+            )
         )
+        assert reminder_columns["reminder_actions"]["client_action_id"][
+            "default"
+        ] is None
+        assert reminder_columns["reminder_actions"]["client_action_id"][
+            "type"
+        ].as_uuid is True
         assert str(reminder_columns["reminder_templates"]["priority"]["default"]) == "'NORMAL'::reminder_priority_enum"
         assert str(reminder_columns["reminder_templates"]["notification_channels"]["default"]) == "'IN_APP'::reminder_notification_channel_enum"
         assert str(reminder_columns["reminder_templates"]["status"]["default"]) == "'ACTIVE'::reminder_template_status_enum"
@@ -235,12 +295,20 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "reminder_actions": {
                 "idx_reminder_actions_occurrence_id",
                 "idx_reminder_actions_performed_by",
+                "uq_reminder_actions_client_action_id",
             },
         }
         for table_name, names in expected_indexes.items():
             assert names.issubset(
                 {item["name"] for item in inspector.get_indexes(table_name)}
             )
+        client_action_index = next(
+            item
+            for item in inspector.get_indexes("reminder_actions")
+            if item["name"] == "uq_reminder_actions_client_action_id"
+        )
+        assert client_action_index["unique"] is True
+        assert client_action_index["column_names"] == ["client_action_id"]
 
         alert_checks = {
             constraint["name"]
@@ -376,6 +444,59 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "reminder_action_type_enum": ["MARK_COMPLETED", "SNOOZE", "REQUEST_HELP", "CAREGIVER_OVERRIDE", "MARK_MISSED", "MARK_MISSED_HANDLED", "RESCHEDULE", "CANCEL", "ADD_NOTE", "FOLLOW_UP"],
             "reminder_notification_channel_enum": ["IN_APP", "PUSH", "SMS"],
         }
+
+        with engine.begin() as connection:
+            occurrence_id, admin_id = insert_reminder_action_fixture(connection)
+            action_params = {
+                "occurrence_id": occurrence_id,
+                "admin_id": admin_id,
+                "client_action_id": uuid4(),
+            }
+            action_sql = text(
+                "INSERT INTO reminder_actions (reminder_occurrence_id, performed_by_user_id, "
+                "action_type, client_action_id) VALUES (:occurrence_id, :admin_id, "
+                "'ADD_NOTE', :client_action_id)"
+            )
+            connection.execute(action_sql, {**action_params, "client_action_id": None})
+            connection.execute(action_sql, {**action_params, "client_action_id": None})
+            connection.execute(action_sql, action_params)
+            with pytest.raises(IntegrityError):
+                with connection.begin_nested():
+                    connection.execute(action_sql, action_params)
+
+        migrate(
+            temporary_url.render_as_string(hide_password=False),
+            "downgrade",
+            "d4e8f6a1b2c3",
+        )
+        idempotency_downgraded = inspect(engine)
+        assert "client_action_id" not in {
+            column["name"]
+            for column in idempotency_downgraded.get_columns("reminder_actions")
+        }
+        assert "uq_reminder_actions_client_action_id" not in {
+            index["name"] for index in idempotency_downgraded.get_indexes("reminder_actions")
+        }
+        migrate(temporary_url.render_as_string(hide_password=False), "upgrade", "head")
+        idempotency_reupgraded = inspect(engine)
+        assert "client_action_id" in {
+            column["name"]
+            for column in idempotency_reupgraded.get_columns("reminder_actions")
+        }
+        assert "uq_reminder_actions_client_action_id" in {
+            index["name"] for index in idempotency_reupgraded.get_indexes("reminder_actions")
+        }
+
+        # The remainder of this test deliberately crosses the older profile
+        # migration, whose downgrade refuses to discard patient rows. Remove
+        # only the disposable fixture created for the idempotency assertions.
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "TRUNCATE reminder_actions, reminder_occurrences, "
+                    "reminder_templates, elderly_patients CASCADE"
+                )
+            )
 
         migrate(temporary_url.render_as_string(hide_password=False), "downgrade", "c8d4e52f6b91")
         downgraded_inspector = inspect(engine)

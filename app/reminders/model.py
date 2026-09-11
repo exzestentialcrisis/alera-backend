@@ -160,6 +160,11 @@ class ReminderAction(Base):
     __table_args__ = (
         Index("idx_reminder_actions_occurrence_id", "reminder_occurrence_id"),
         Index("idx_reminder_actions_performed_by", "performed_by_user_id"),
+        Index(
+            "uq_reminder_actions_client_action_id",
+            "client_action_id",
+            unique=True,
+        ),
     )
 
     reminder_action_id: Mapped[uuid.UUID] = mapped_column(
@@ -172,6 +177,9 @@ class ReminderAction(Base):
     )
     performed_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False
+    )
+    client_action_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
     )
     action_type: Mapped[ReminderActionType] = mapped_column(
         ENUM(ReminderActionType, name="reminder_action_type_enum", create_type=False),

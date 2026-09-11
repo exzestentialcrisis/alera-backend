@@ -1,4 +1,4 @@
-from sqlalchemy.dialects.postgresql import ENUM, JSONB
+from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 
 from app.reminders.enums import (
     ReminderActionType,
@@ -46,8 +46,12 @@ def test_reminder_tables_columns_and_foreign_keys():
         "reminder_action_id", "reminder_occurrence_id", "performed_by_user_id", "action_type", "performed_at",
     }
     assert all(not ReminderAction.__table__.c[name].nullable for name in required_action_columns)
-    assert all(ReminderAction.__table__.c[name].nullable for name in ("action_note", "previous_status", "new_status", "new_due_at", "metadata"))
+    assert all(ReminderAction.__table__.c[name].nullable for name in ("action_note", "previous_status", "new_status", "new_due_at", "metadata", "client_action_id"))
     assert isinstance(ReminderAction.__table__.c.metadata.type, JSONB)
+    assert isinstance(ReminderAction.__table__.c.client_action_id.type, UUID)
+    assert ReminderAction.__table__.c.client_action_id.type.as_uuid is True
+    assert ReminderAction.__table__.c.client_action_id.default is None
+    assert ReminderAction.__table__.c.client_action_id.server_default is None
     assert _foreign_key_targets(ReminderAction) == {
         "reminder_occurrences.reminder_occurrence_id", "users.user_id"
     }
@@ -104,8 +108,18 @@ def test_reminder_server_defaults_constraints_and_indexes():
         "idx_reminder_occurrences_due_at", "idx_reminder_occurrences_status", "idx_reminder_occurrences_template_id"
     }
     assert _index_names(ReminderAction) == {
-        "idx_reminder_actions_occurrence_id", "idx_reminder_actions_performed_by"
+        "idx_reminder_actions_occurrence_id", "idx_reminder_actions_performed_by",
+        "uq_reminder_actions_client_action_id",
     }
+    client_action_index = next(
+        index
+        for index in action.indexes
+        if index.name == "uq_reminder_actions_client_action_id"
+    )
+    assert client_action_index.unique is True
+    assert [column.name for column in client_action_index.columns] == [
+        "client_action_id"
+    ]
 
 
 def test_reminder_python_enum_values_match_database_values():
