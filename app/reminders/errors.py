@@ -12,3 +12,7 @@ class ReminderAccessForbiddenError(ReminderError):
 
 class ReminderQueryValidationError(ReminderError):
     pass
+
+
+class ReminderActionConflictError(ReminderError):
+    pass

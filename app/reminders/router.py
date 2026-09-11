@@ -12,15 +12,22 @@ from app.reminders.errors import (
     ReminderAccessForbiddenError,
     ReminderNotFoundError,
     ReminderQueryValidationError,
+    ReminderActionConflictError,
 )
 from app.reminders.schema import (
     ReminderOccurrenceListResponse,
     ReminderOccurrenceRead,
+    ReminderActionResponse,
+    ReminderCompleteRequest,
+    ReminderSnoozeRequest,
 )
 from app.reminders.service import (
     get_reminder_occurrence,
     list_reminder_occurrences,
     reminder_occurrence_payload,
+    reminder_action_payload,
+    complete_reminder,
+    snooze_reminder,
 )
 from app.users.model import User
 
@@ -34,6 +41,8 @@ def _raise_http_error(exc: Exception) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     if isinstance(exc, ReminderQueryValidationError):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    if isinstance(exc, ReminderActionConflictError):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     raise exc
 
 
@@ -90,3 +99,59 @@ async def get_reminder(
         _raise_http_error(exc)
         raise AssertionError("unreachable")
     return reminder_occurrence_payload(occurrence, template)
+
+
+def _run_patient_action(db: Session, operation) -> dict:
+    try:
+        occurrence, template, action, idempotent = operation()
+        db.commit()
+        return {
+            "reminder": reminder_occurrence_payload(occurrence, template),
+            "action": reminder_action_payload(action),
+            "idempotent": idempotent,
+        }
+    except (
+        ReminderAccessForbiddenError,
+        ReminderNotFoundError,
+        ReminderActionConflictError,
+    ) as exc:
+        db.rollback()
+        _raise_http_error(exc)
+        raise AssertionError("unreachable")
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/{occurrence_id}/complete", response_model=ReminderActionResponse)
+async def complete(
+    occurrence_id: UUID,
+    payload: ReminderCompleteRequest,
+    actor: User = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    return _run_patient_action(
+        db,
+        lambda: complete_reminder(
+            db, actor=actor, occurrence_id=occurrence_id,
+            client_action_id=payload.client_action_id, note=payload.note,
+        ),
+    )
+
+
+@router.post("/{occurrence_id}/snooze", response_model=ReminderActionResponse)
+async def snooze(
+    occurrence_id: UUID,
+    payload: ReminderSnoozeRequest,
+    actor: User = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    return _run_patient_action(
+        db,
+        lambda: snooze_reminder(
+            db, actor=actor, occurrence_id=occurrence_id,
+            client_action_id=payload.client_action_id,
+            snooze_minutes=payload.snooze_minutes,
+            note=payload.note,
+        ),
+    )
