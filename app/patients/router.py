@@ -16,12 +16,16 @@ from app.patients.schema import (
     PatientCreated,
     PatientDetail,
     PatientListResponse,
+    MonitoringSettingsResponse,
+    MonitoringSettingsUpdate,
 )
 from app.patients.service import (
     create_patient,
     get_patient,
     list_patients,
     patient_read_payload,
+    update_monitoring_settings,
+    MonitoringSettingsValidationError,
 )
 from app.users.model import User
 
@@ -77,6 +81,32 @@ def read_patient(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
+
+
+@router.patch(
+    "/{patient_id}/monitoring-settings",
+    response_model=MonitoringSettingsResponse,
+    responses={404: {"description": "Patient not found in the actor's scope."}},
+)
+def update_settings(
+    patient_id: UUID,
+    payload: MonitoringSettingsUpdate,
+    actor: User = Depends(get_current_caregiver),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = update_monitoring_settings(db, actor, patient_id, payload)
+        db.commit()
+        return result
+    except PatientNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MonitoringSettingsValidationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("", response_model=PatientCreated, status_code=201)

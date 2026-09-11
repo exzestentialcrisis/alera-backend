@@ -19,6 +19,9 @@ from app.patients.schema import (
     MonitoringStatus,
     PatientCreate,
     PatientCreated,
+    MonitoringSettingsResponse,
+    MonitoringSettingsUpdate,
+    ThresholdMode,
 )
 from app.users.model import AccountStatus, User, UserRole
 
@@ -265,8 +268,77 @@ def patient_read_payload(row: PatientReadRow, *, detail: bool) -> dict:
             monitoring_notes=patient.health_notes,
             archived_at=patient.archived_at,
             assignment=row.assignment,
+            normal_hr_min=patient.normal_hr_min,
+            normal_hr_max=patient.normal_hr_max,
+            usual_spo2_min=patient.usual_spo2_min,
+            usual_spo2_max=patient.usual_spo2_max,
+            threshold_mode=_threshold_mode(patient),
         )
     return payload
+
+
+class MonitoringSettingsValidationError(ValueError):
+    pass
+
+
+def _threshold_mode(patient: ElderlyPatient) -> ThresholdMode:
+    if (
+        patient.normal_hr_min == 60
+        and patient.normal_hr_max == 100
+        and patient.usual_spo2_min == 95
+        and patient.usual_spo2_max is None
+    ):
+        return ThresholdMode.DEFAULT
+    return ThresholdMode.CUSTOM
+
+
+def update_monitoring_settings(
+    db: Session,
+    actor: User,
+    patient_id: UUID,
+    payload: MonitoringSettingsUpdate,
+) -> MonitoringSettingsResponse:
+    row = db.execute(
+        select(ElderlyPatient)
+        .where(
+            ElderlyPatient.patient_id == patient_id,
+            ElderlyPatient.patient_id.in_(_patient_scope(actor)),
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise PatientNotFoundError("Patient not found.")
+
+    values = {
+        "normal_hr_min": row.normal_hr_min,
+        "normal_hr_max": row.normal_hr_max,
+        "usual_spo2_min": row.usual_spo2_min,
+        "usual_spo2_max": row.usual_spo2_max,
+    }
+    values.update(payload.model_dump(exclude_unset=True))
+    if values["normal_hr_min"] > values["normal_hr_max"]:
+        raise MonitoringSettingsValidationError(
+            "normal_hr_min must be less than or equal to normal_hr_max."
+        )
+    if (
+        values["usual_spo2_max"] is not None
+        and values["usual_spo2_min"] > values["usual_spo2_max"]
+    ):
+        raise MonitoringSettingsValidationError(
+            "usual_spo2_min must be less than or equal to usual_spo2_max."
+        )
+
+    for field, value in values.items():
+        setattr(row, field, value)
+    db.flush()
+    return MonitoringSettingsResponse(
+        patient_id=row.patient_id,
+        threshold_mode=_threshold_mode(row),
+        normal_hr_min=row.normal_hr_min,
+        normal_hr_max=row.normal_hr_max,
+        usual_spo2_min=row.usual_spo2_min,
+        usual_spo2_max=row.usual_spo2_max,
+        updated_at=row.updated_at,
+    )
 
 
 def create_patient(db: Session, actor: User, household_id: UUID,

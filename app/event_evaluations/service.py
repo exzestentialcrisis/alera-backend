@@ -158,6 +158,24 @@ def evaluate_spo2_event(
         severity = EvaluationSeverity.CRITICAL
         reason = f"SpO₂ {value}% fell below the critical " "threshold of 90%."
 
+    elif (
+        patient.normal_hr_min != 60
+        or patient.normal_hr_max != 100
+        or patient.usual_spo2_min != 95
+        or patient.usual_spo2_max is not None
+    ) and (
+        value < Decimal(patient.usual_spo2_min)
+        or (
+            patient.usual_spo2_max is not None
+            and value > Decimal(patient.usual_spo2_max)
+        )
+    ):
+        condition = ConditionKey.SPO2_LOW
+        threshold = Decimal(patient.usual_spo2_min)
+        new_state = MonitoringState.ELEVATED
+        severity = EvaluationSeverity.WARNING
+        reason = f"SpO₂ {value}% is outside the patient's usual range."
+
     elif value <= Decimal("93"):
         condition = ConditionKey.SPO2_LOW
         threshold = Decimal("93")

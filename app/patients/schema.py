@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.household_access.schema import CaregiverAssignmentResponse
 from app.event_evaluations.model import EvaluationSeverity
@@ -23,8 +23,12 @@ class PatientCreate(BaseModel):
     emergency_contact_phone: str | None = Field(default=None, max_length=30)
     known_conditions: str | None = None
     medications: str | None = None
-    baseline_heart_rate: Decimal | None = Field(default=None, gt=0, max_digits=6, decimal_places=2)
-    baseline_spo2: Decimal | None = Field(default=None, ge=0, le=100, max_digits=5, decimal_places=2)
+    baseline_heart_rate: Decimal | None = Field(
+        default=None, gt=0, max_digits=6, decimal_places=2
+    )
+    baseline_spo2: Decimal | None = Field(
+        default=None, ge=0, le=100, max_digits=5, decimal_places=2
+    )
     monitoring_notes: str | None = None
 
 
@@ -83,5 +87,43 @@ class PatientListResponse(BaseModel):
     offset: int
 
 
+class ThresholdMode(str, enum.Enum):
+    DEFAULT = "DEFAULT"
+    CUSTOM = "CUSTOM"
+
+
 class PatientDetail(PatientCreated):
     current_summary: CurrentHealthSummary
+    normal_hr_min: int
+    normal_hr_max: int
+    usual_spo2_min: int
+    usual_spo2_max: int | None
+    threshold_mode: ThresholdMode
+
+
+class MonitoringSettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    normal_hr_min: int | None = Field(default=None, gt=0)
+    normal_hr_max: int | None = Field(default=None, gt=0)
+    usual_spo2_min: int | None = Field(default=None, ge=0, le=100)
+    usual_spo2_max: int | None = Field(default=None, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def reject_empty_or_null_non_nullable_fields(self):
+        if not self.model_fields_set:
+            raise ValueError("At least one monitoring setting must be provided.")
+        for field in ("normal_hr_min", "normal_hr_max", "usual_spo2_min"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} may not be null.")
+        return self
+
+
+class MonitoringSettingsResponse(BaseModel):
+    patient_id: UUID
+    threshold_mode: ThresholdMode
+    normal_hr_min: int
+    normal_hr_max: int
+    usual_spo2_min: int
+    usual_spo2_max: int | None
+    updated_at: datetime
