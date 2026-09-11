@@ -256,6 +256,7 @@ def _same_action(
     action_type: ReminderActionType,
     note: str | None,
     snooze_minutes: int | None,
+    metadata: dict | None = None,
 ) -> bool:
     if (
         action.performed_by_user_id != actor.user_id
@@ -266,7 +267,7 @@ def _same_action(
         return False
     if action_type is ReminderActionType.SNOOZE:
         return (action.action_metadata or {}).get("snooze_minutes") == snooze_minutes
-    return True
+    return (action.action_metadata or {}) == (metadata or {})
 
 
 def _existing_action(
@@ -285,6 +286,7 @@ def _replay_or_conflict(
     action_type: ReminderActionType,
     note: str | None,
     snooze_minutes: int | None,
+    metadata: dict | None = None,
 ) -> ReminderAction | None:
     if action is None:
         return None
@@ -295,6 +297,7 @@ def _replay_or_conflict(
         action_type=action_type,
         note=note,
         snooze_minutes=snooze_minutes,
+        metadata=metadata,
     ):
         return action
     raise ReminderActionConflictError("client_action_id was already used for another action.")
@@ -309,6 +312,7 @@ def _insert_action_safely(
     action_type: ReminderActionType,
     note: str | None,
     snooze_minutes: int | None,
+    metadata: dict | None = None,
 ) -> ReminderAction | None:
     try:
         with db.begin_nested():
@@ -324,6 +328,7 @@ def _insert_action_safely(
             action_type=action_type,
             note=note,
             snooze_minutes=snooze_minutes,
+            metadata=metadata,
         )
         if replay is not None:
             db.refresh(occurrence)
@@ -349,6 +354,7 @@ def complete_reminder(
         action_type=ReminderActionType.MARK_COMPLETED,
         note=note,
         snooze_minutes=None,
+        metadata={},
     )
     if replay is not None:
         return occurrence, template, replay, True
@@ -380,6 +386,7 @@ def complete_reminder(
     replay = _insert_action_safely(
         db, action=action, actor=actor, occurrence=occurrence,
         action_type=ReminderActionType.MARK_COMPLETED, note=note, snooze_minutes=None,
+        metadata={},
     )
     if replay is not None:
         return occurrence, template, replay, True
@@ -408,6 +415,7 @@ def snooze_reminder(
         _existing_action(db, client_action_id=client_action_id),
         actor=actor, occurrence=occurrence, action_type=ReminderActionType.SNOOZE,
         note=note, snooze_minutes=effective_minutes,
+        metadata=None,
     )
     if replay is not None:
         return occurrence, template, replay, True
@@ -473,6 +481,7 @@ def record_caregiver_reminder_action(
         action_type=action_type,
         note=note,
         snooze_minutes=None,
+        metadata={},
     )
     if replay is not None:
         return occurrence, template, replay, True
@@ -509,7 +518,131 @@ def record_caregiver_reminder_action(
         action_type=action_type,
         note=note,
         snooze_minutes=None,
+        metadata={},
     )
     if replay is not None:
         return occurrence, template, replay, True
+    return occurrence, template, action, False
+
+
+def complete_reminder_on_behalf(
+    db: Session,
+    *,
+    actor: User,
+    occurrence_id: UUID,
+    client_action_id: UUID,
+    note: str,
+    at: datetime | None = None,
+) -> ReminderActionResult:
+    return _mutate_caregiver_reminder(
+        db,
+        actor=actor,
+        occurrence_id=occurrence_id,
+        client_action_id=client_action_id,
+        note=note,
+        action_type=ReminderActionType.CAREGIVER_OVERRIDE,
+        allowed_statuses={
+            ReminderOccurrenceStatus.UPCOMING,
+            ReminderOccurrenceStatus.DUE,
+            ReminderOccurrenceStatus.SNOOZED,
+            ReminderOccurrenceStatus.MISSED,
+        },
+        metadata={"operation": "COMPLETE_ON_BEHALF"},
+        at=at,
+    )
+
+
+def cancel_reminder(
+    db: Session,
+    *,
+    actor: User,
+    occurrence_id: UUID,
+    client_action_id: UUID,
+    note: str,
+    at: datetime | None = None,
+) -> ReminderActionResult:
+    return _mutate_caregiver_reminder(
+        db,
+        actor=actor,
+        occurrence_id=occurrence_id,
+        client_action_id=client_action_id,
+        note=note,
+        action_type=ReminderActionType.CANCEL,
+        allowed_statuses={
+            ReminderOccurrenceStatus.UPCOMING,
+            ReminderOccurrenceStatus.DUE,
+            ReminderOccurrenceStatus.SNOOZED,
+        },
+        metadata={},
+        at=at,
+    )
+
+
+def _mutate_caregiver_reminder(
+    db: Session,
+    *,
+    actor: User,
+    occurrence_id: UUID,
+    client_action_id: UUID,
+    note: str,
+    action_type: ReminderActionType,
+    allowed_statuses: set[ReminderOccurrenceStatus],
+    metadata: dict,
+    at: datetime | None,
+) -> ReminderActionResult:
+    """Apply a locked caregiver transition while preserving exact retries."""
+    occurrence, template = _locked_caregiver_occurrence(
+        db, actor=actor, occurrence_id=occurrence_id
+    )
+    replay = _replay_or_conflict(
+        _existing_action(db, client_action_id=client_action_id),
+        actor=actor,
+        occurrence=occurrence,
+        action_type=action_type,
+        note=note,
+        snooze_minutes=None,
+        metadata=metadata,
+    )
+    if replay is not None:
+        return occurrence, template, replay, True
+    if occurrence.status not in allowed_statuses:
+        raise ReminderActionConflictError("Reminder occurrence cannot be changed.")
+
+    action_time = at or utc_now()
+    previous_status = occurrence.status
+    if action_type is ReminderActionType.CAREGIVER_OVERRIDE:
+        new_status = (
+            ReminderOccurrenceStatus.COMPLETED_LATE
+            if previous_status is ReminderOccurrenceStatus.MISSED
+            or action_time > occurrence.due_at
+            else ReminderOccurrenceStatus.COMPLETED
+        )
+    else:
+        new_status = ReminderOccurrenceStatus.CANCELED
+    action = ReminderAction(
+        client_action_id=client_action_id,
+        reminder_occurrence_id=occurrence.reminder_occurrence_id,
+        performed_by_user_id=actor.user_id,
+        action_type=action_type,
+        action_note=note,
+        previous_status=previous_status,
+        new_status=new_status,
+        new_due_at=None,
+        action_metadata=metadata,
+        performed_at=action_time,
+    )
+    replay = _insert_action_safely(
+        db,
+        action=action,
+        actor=actor,
+        occurrence=occurrence,
+        action_type=action_type,
+        note=note,
+        snooze_minutes=None,
+        metadata=metadata,
+    )
+    if replay is not None:
+        return occurrence, template, replay, True
+    occurrence.status = new_status
+    occurrence.updated_at = action_time
     return occurrence, template, action, False

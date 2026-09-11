@@ -25,6 +25,8 @@ from app.reminders.schema import (
     ReminderCompleteRequest,
     ReminderSnoozeRequest,
     ReminderCareNoteRequest,
+    ReminderCaregiverCompleteRequest,
+    ReminderCancelRequest,
     ReminderMissedHandledRequest,
     ReminderActionHistoryResponse,
 )
@@ -37,6 +39,8 @@ from app.reminders.service import (
     snooze_reminder,
     list_reminder_actions,
     record_caregiver_reminder_action,
+    complete_reminder_on_behalf,
+    cancel_reminder,
 )
 from app.users.model import User
 
@@ -179,6 +183,46 @@ async def snooze(
             db, actor=actor, occurrence_id=occurrence_id,
             client_action_id=payload.client_action_id,
             snooze_minutes=payload.snooze_minutes,
+            note=payload.note,
+        ),
+    )
+
+
+@router.post(
+    "/{occurrence_id}/complete-on-behalf", response_model=ReminderActionResponse
+)
+async def complete_on_behalf(
+    occurrence_id: UUID,
+    payload: ReminderCaregiverCompleteRequest,
+    actor: User = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    return _run_caregiver_action(
+        db,
+        lambda: complete_reminder_on_behalf(
+            db,
+            actor=actor,
+            occurrence_id=occurrence_id,
+            client_action_id=payload.client_action_id,
+            note=payload.note,
+        ),
+    )
+
+
+@router.post("/{occurrence_id}/cancel", response_model=ReminderActionResponse)
+async def cancel(
+    occurrence_id: UUID,
+    payload: ReminderCancelRequest,
+    actor: User = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    return _run_caregiver_action(
+        db,
+        lambda: cancel_reminder(
+            db,
+            actor=actor,
+            occurrence_id=occurrence_id,
+            client_action_id=payload.client_action_id,
             note=payload.note,
         ),
     )

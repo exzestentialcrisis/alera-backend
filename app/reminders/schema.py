@@ -60,6 +60,14 @@ class ReminderCareNoteRequest(BaseModel):
         return value
 
 
+class ReminderCaregiverCompleteRequest(ReminderCareNoteRequest):
+    pass
+
+
+class ReminderCancelRequest(ReminderCareNoteRequest):
+    pass
+
+
 class ReminderMissedHandledRequest(ReminderActionRequest):
     pass
 
