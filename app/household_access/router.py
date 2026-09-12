@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.alerts.dependencies import get_development_actor
+from app.auth.dependencies import get_current_actor
 from app.db.database import get_db
 from app.household_access.errors import (
     AccessConflictError,
@@ -93,7 +94,7 @@ def unassign_caregiver(
 def create_patient_access_code(
     patient_id: UUID,
     payload: PatientAccessCodeCreate,
-    actor: User = Depends(get_development_actor),
+    actor: User = Depends(get_current_actor),
     db: Session = Depends(get_db),
 ):
     code, readable = _handle(
@@ -117,7 +118,7 @@ def create_patient_access_code(
 def revoke_patient_access_code(
     patient_id: UUID,
     access_code_id: UUID,
-    actor: User = Depends(get_development_actor),
+    actor: User = Depends(get_current_actor),
     db: Session = Depends(get_db),
 ):
     code = _handle(

@@ -50,6 +50,11 @@ class PatientAccessCode(Base):
     __tablename__ = "patient_access_codes"
     __table_args__ = (
         Index("ix_patient_access_codes_patient_created", "patient_id", "created_at"),
+        Index(
+            "ix_patient_access_codes_active_selector",
+            "access_code_selector",
+            postgresql_where=text("used_at IS NULL AND revoked_at IS NULL"),
+        ),
     )
 
     access_code_id: Mapped[uuid.UUID] = mapped_column(
@@ -59,6 +64,7 @@ class PatientAccessCode(Base):
         UUID(as_uuid=True), ForeignKey("elderly_patients.patient_id"), nullable=False
     )
     code_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    access_code_selector: Mapped[str | None] = mapped_column(String(4), nullable=True)
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False
     )

@@ -1,11 +1,22 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.auth.errors import AuthenticationError
-from app.auth.schema import CaregiverLoginRequest
+from app.auth.schema import (
+    CaregiverLoginRequest,
+    HouseholdValidationRequest,
+    PatientAccessRequest,
+)
 from app.auth.security import create_access_token, verify_password
 from app.core.config import Settings
-from app.household_access.model import CaregiverPatientAssignment
+from app.core.time import utc_now
+from app.household_access.model import CaregiverPatientAssignment, PatientAccessCode
+from app.household_access.security import (
+    access_code_selector,
+    normalize_access_code,
+    verify_access_code,
+)
+from app.households.codes import normalize_household_code
 from app.households.model import Household, HouseholdStatus
 from app.patients.model import ElderlyPatient
 from app.users.model import AccountStatus, User, UserRole
@@ -15,10 +26,12 @@ def authenticate_caregiver(
     db: Session, credentials: CaregiverLoginRequest, settings: Settings
 ) -> dict:
     failure = AuthenticationError("Invalid household code, email, or password.")
+    normalized_household_code = normalize_household_code(credentials.household_code)
+    if normalized_household_code is None:
+        raise failure
     household = db.scalar(
         select(Household).where(
-            func.upper(Household.household_code)
-            == credentials.household_code.strip().upper(),
+            func.upper(Household.household_code) == normalized_household_code,
             Household.household_status == HouseholdStatus.ACTIVE,
             Household.archived_at.is_(None),
         )
@@ -75,3 +88,81 @@ def authenticate_caregiver(
             "household_code": household.household_code,
         },
     }
+
+
+def validate_household_code(
+    db: Session, payload: HouseholdValidationRequest
+) -> dict | None:
+    """Resolve only the public display data for an available household."""
+    normalized = normalize_household_code(payload.household_code)
+    if normalized is None:
+        return None
+    household_name = db.scalar(
+        select(Household.household_name).where(
+            func.upper(Household.household_code) == normalized,
+            Household.household_status == HouseholdStatus.ACTIVE,
+            Household.archived_at.is_(None),
+        )
+    )
+    if household_name is None:
+        return None
+    return {"valid": True, "household_name": household_name}
+
+
+def authenticate_patient(
+    db: Session, credentials: PatientAccessRequest, settings: Settings
+) -> dict:
+
+    failure = AuthenticationError("Invalid access code.")
+    normalized = normalize_access_code(credentials.access_code)
+    if normalized is None:
+        raise failure
+    now = utc_now()
+    # A short fixed bound prevents selector collisions from amplifying scrypt work.
+    candidates = db.execute(
+        select(PatientAccessCode, ElderlyPatient, User, Household)
+        .join(ElderlyPatient, ElderlyPatient.patient_id == PatientAccessCode.patient_id)
+        .join(User, User.user_id == ElderlyPatient.user_id)
+        .join(Household, Household.household_id == ElderlyPatient.household_id)
+        .where(
+            PatientAccessCode.access_code_selector == access_code_selector(normalized),
+            Household.household_status == HouseholdStatus.ACTIVE,
+            Household.archived_at.is_(None),
+            ElderlyPatient.archived_at.is_(None),
+            User.account_status == AccountStatus.ACTIVE,
+            User.role == UserRole.ELDERLY_PATIENT,
+            PatientAccessCode.used_at.is_(None),
+            PatientAccessCode.revoked_at.is_(None),
+            PatientAccessCode.expires_at > now,
+        ).limit(8)
+    )
+    for code, patient, user, household in candidates:
+        if not verify_access_code(normalized, code.code_hash):
+            continue
+        # Conditional UPDATE is rechecked after concurrent writers commit.
+        consumed = db.execute(
+            update(PatientAccessCode).where(
+                PatientAccessCode.access_code_id == code.access_code_id,
+                PatientAccessCode.used_at.is_(None),
+                PatientAccessCode.revoked_at.is_(None),
+                PatientAccessCode.expires_at > utc_now(),
+            ).values(used_at=utc_now()).returning(PatientAccessCode.access_code_id)
+        ).scalar_one_or_none()
+        if consumed is None:
+            raise failure
+        token, expires_at = create_access_token(
+            user_id=user.user_id,
+            household_id=household.household_id,
+            secret=settings.alera_jwt_secret or "",
+            expires_minutes=settings.alera_jwt_access_token_minutes,
+        )
+        return {
+            "access_token": token, "token_type": "bearer", "expires_at": expires_at,
+            "actor": {
+                "user_id": user.user_id, "full_name": user.full_name, "role": user.role,
+                "household_id": household.household_id,
+                "household_name": household.household_name,
+                "household_code": household.household_code,
+            },
+        }
+    raise failure
