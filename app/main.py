@@ -5,6 +5,7 @@ from app.alerts.router import router as alert_router
 from app.health_events.router import router as health_event_router
 from app.household_access.router import router as household_access_router
 from app.auth.router import router as auth_router
+from app.monitoring_devices.router import router as monitoring_device_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -19,7 +20,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(alert_router)
     application.include_router(household_access_router)
     application.include_router(auth_router)
-
+    application.include_router(monitoring_device_router)
     @application.get("/health")
     async def health_check() -> dict[str, str]:
         return {

@@ -7,3 +7,4 @@ from app.condition_trackers.model import ConditionTracker
 from app.alerts.model import Alert
 from app.alert_actions.model import AlertAction
 from app.household_access.model import CaregiverPatientAssignment, PatientAccessCode
+from app.monitoring_devices.model import MonitoringDevice
