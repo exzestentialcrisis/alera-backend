@@ -30,6 +30,19 @@ class DeviceStatusUpsertResult:
     device: MonitoringDevice
     applied: bool
 
+def list_patient_monitoring_devices(
+    db: Session,
+    patient_id,
+) -> list[MonitoringDevice]:
+    return list(
+        db.scalars(
+            select(MonitoringDevice)
+            .where(
+                MonitoringDevice.patient_id == patient_id,
+            )
+            .order_by(MonitoringDevice.device_type)
+        ).all()
+    )
 
 def _patient_for_actor(
     db: Session,
@@ -56,7 +69,6 @@ def _patient_for_actor(
 
     return patient
 
-
 def _find_device_for_update(
     db: Session,
     payload: DeviceStatusUpsert,
@@ -69,7 +81,6 @@ def _find_device_for_update(
         )
         .with_for_update()
     )
-
 
 def _mark_watch_unknown_if_phone_disconnected(
     db: Session,
@@ -104,7 +115,6 @@ def _mark_watch_unknown_if_phone_disconnected(
     watch.connection_status = DeviceConnectionStatus.UNKNOWN
     watch.status_changed_at = now
     watch.updated_at = now
-
 
 def _apply_update(
     db: Session,

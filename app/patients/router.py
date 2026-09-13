@@ -5,6 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
+from app.monitoring_devices.schema import MonitoringDeviceRead
+from app.monitoring_devices.service import list_patient_monitoring_devices
+
 from app.auth.dependencies import bearer_scheme, get_current_caregiver
 from app.auth.security import decode_access_token
 from app.core.config import Settings, get_settings
@@ -82,6 +85,35 @@ def read_patient(
             detail=str(exc),
         ) from exc
 
+router.get(
+    "/{patient_id}/monitoring-devices",
+    response_model=list[MonitoringDeviceRead],
+    summary="List monitoring devices for a patient",
+    responses={
+        404: {
+            "description": "Patient not found in the actor's scope.",
+        }
+    },
+)
+def read_patient_monitoring_devices(
+    patient_id: UUID,
+    actor: User = Depends(get_current_caregiver),
+    db: Session = Depends(get_db),
+):
+    try:
+        # Reuse the existing patient scope check.
+        get_patient(db, actor, patient_id)
+
+        return list_patient_monitoring_devices(
+            db,
+            patient_id,
+        )
+
+    except PatientNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
 
 @router.patch(
     "/{patient_id}/monitoring-settings",
