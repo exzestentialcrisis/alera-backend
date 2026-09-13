@@ -10,6 +10,7 @@ from app.event_evaluations.model import EvaluationSeverity
 from app.patients.model import IntegrationStatus, Sex
 from app.users.model import AccountStatus
 
+from app.monitoring_devices.schema import MonitoringDeviceRead
 
 class PatientCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -114,6 +115,8 @@ class PatientAccessSummary(BaseModel):
 class PatientDetail(PatientCreated):
     current_summary: CurrentHealthSummary
     patient_access: PatientAccessSummary
+    monitoring_devices: list[MonitoringDeviceRead]
+
     normal_hr_min: int
     normal_hr_max: int
     usual_spo2_min: int

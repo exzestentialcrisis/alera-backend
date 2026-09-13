@@ -5,6 +5,8 @@ from uuid import UUID
 from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import Session
 
+from app.monitoring_devices.model import MonitoringDevice
+
 from app.alerts.model import Alert, AlertStatus
 from app.core.time import utc_now
 from app.event_evaluations.model import EvaluationSeverity
@@ -45,6 +47,7 @@ class PatientReadRow:
     assignment: CaregiverPatientAssignment | None
     current_summary: CurrentHealthSummary
     patient_access: PatientAccessSummary | None = None
+    monitoring_devices: tuple[MonitoringDevice, ...] = ()
 
 
 def _patient_scope(actor: User) -> Select:
@@ -239,12 +242,23 @@ def get_patient(db: Session, actor: User, patient_id: UUID) -> PatientReadRow:
         raise PatientNotFoundError("Patient not found.")
     patient, user = row
     assignment = _assignments_for_actor(db, actor, [patient_id]).get(patient_id)
+    monitoring_devices = tuple(
+    db.scalars(
+        select(MonitoringDevice)
+        .where(
+            MonitoringDevice.patient_id == patient_id,
+        )
+        .order_by(MonitoringDevice.device_type)
+        ).all()
+   )
+    
     return PatientReadRow(
-        patient,
-        user,
-        assignment,
-        _summary_map(db, [patient])[patient_id],
-        _patient_access_summary(db, patient_id),
+        patient=patient,
+        user=user,
+        assignment=assignment,
+        current_summary=_summary_map(db, [patient])[patient_id],
+        patient_access=_patient_access_summary(db, patient_id),
+        monitoring_devices=monitoring_devices,
     )
 
 
@@ -328,6 +342,7 @@ def patient_read_payload(row: PatientReadRow, *, detail: bool) -> dict:
     if detail:
         payload.update(
             patient_access=row.patient_access,
+            monitoring_devices=row.monitoring_devices,
             emergency_contact_name=patient.emergency_contact_name,
             emergency_contact_phone=patient.emergency_contact_phone,
             known_conditions=patient.known_conditions,

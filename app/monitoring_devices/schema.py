@@ -57,6 +57,29 @@ class DeviceStatusUpsert(BaseModel):
 
         return value
 
+class MonitoringDeviceRead(BaseModel):
+    device_id: UUID
+    patient_id: UUID
+
+    device_type: MonitoringDeviceType
+
+    device_name: str | None
+    device_model: str | None
+
+    battery_percent: int | None
+
+    connection_status: DeviceConnectionStatus
+
+    reported_at: datetime | None
+    last_seen_at: datetime
+    status_changed_at: datetime
+
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(
+        from_attributes=True,
+    )
 
 class DeviceStatusResponse(BaseModel):
     device_id: UUID
