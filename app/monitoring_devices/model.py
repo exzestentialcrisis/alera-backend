@@ -28,14 +28,6 @@ class DeviceConnectionStatus(str, enum.Enum):
     DISCONNECTED = "DISCONNECTED"
     UNKNOWN = "UNKNOWN"
 
-
-class DeviceNetworkType(str, enum.Enum):
-    WIFI = "WIFI"
-    CELLULAR = "CELLULAR"
-    NONE = "NONE"
-    UNKNOWN = "UNKNOWN"
-
-
 class MonitoringDevice(Base):
     __tablename__ = "monitoring_devices"
 
@@ -98,16 +90,6 @@ class MonitoringDevice(Base):
         ),
         nullable=False,
         default=DeviceConnectionStatus.UNKNOWN,
-        server_default="UNKNOWN",
-    )
-
-    network_type: Mapped[DeviceNetworkType] = mapped_column(
-        Enum(
-            DeviceNetworkType,
-            name="device_network_type",
-        ),
-        nullable=False,
-        default=DeviceNetworkType.UNKNOWN,
         server_default="UNKNOWN",
     )
 

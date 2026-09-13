@@ -33,24 +33,12 @@ device_connection_status = postgresql.ENUM(
     name="device_connection_status",
 )
 
-device_network_type = postgresql.ENUM(
-    "WIFI",
-    "CELLULAR",
-    "NONE",
-    "UNKNOWN",
-    name="device_network_type",
-)
 
 
 def upgrade() -> None:
     """Upgrade schema."""
 
     bind = op.get_bind()
-
-    device_network_type.create(
-    bind,
-    checkfirst=True,
-    )
 
     monitoring_device_type.create(
         bind,
@@ -76,17 +64,7 @@ def upgrade() -> None:
            ),
             nullable=False,
         ),
-        sa.Column(
-            "network_type",
-        postgresql.ENUM(
-        name="device_network_type",
-        create_type=False,
-         ),
-                server_default=sa.text(
-        "'UNKNOWN'::device_network_type"
-        ),
-            nullable=False,
-        ),
+
         sa.Column(
             "device_id",
             sa.UUID(),
@@ -186,11 +164,6 @@ def downgrade() -> None:
     )
 
     bind = op.get_bind()
-
-    device_network_type.drop(
-    bind,
-    checkfirst=True,
-    )
 
     device_connection_status.drop(
         bind,

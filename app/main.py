@@ -1,3 +1,6 @@
+import asyncio
+
+from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI
 
 from app.alerts.router import router as alert_router
@@ -10,13 +13,34 @@ from app.household_access.router import router as household_access_router
 from app.auth.router import router as auth_router
 from app.monitoring_devices.router import router as monitoring_device_router
 from app.reminders.router import router as reminder_router
+from app.monitoring_devices.runner import (
+    device_liveness_loop,
+    stop_device_liveness_task,
+)
 
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    settings = application.state.settings
+
+    task = asyncio.create_task(
+        device_liveness_loop(
+            settings
+        )
+    )
+
+    try:
+        yield
+    finally:
+        await stop_device_liveness_task(
+            task
+        )
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     application = FastAPI(
         title=app_settings.app_name,
         version=app_settings.app_version,
+        lifespan=lifespan,
     )
     application.state.settings = app_settings
     application.dependency_overrides[get_settings] = lambda: app_settings

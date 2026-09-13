@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     firebase_project_id: str | None = None
     firebase_service_account_json: SecretStr | None = None
 
+    device_heartbeat_stale_seconds: int = 150
+    device_liveness_check_seconds: int = 30
+
     alera_jwt_secret: str | None = None
     alera_jwt_access_token_minutes: int = 60
 

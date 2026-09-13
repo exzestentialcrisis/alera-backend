@@ -23,6 +23,27 @@ ALERT_DISPLAY_MAPPINGS: dict[ConditionKey, AlertDisplayMapping] = {
         "BPM",
     ),
     ConditionKey.SPO2_LOW: AlertDisplayMapping("Low SpO₂", MetricType.SPO2, "%"),
+
+    ConditionKey.PHONE_DISCONNECTED: AlertDisplayMapping(
+    "Patient Phone Disconnected",
+    MetricType.CONNECTION_STATUS,
+    "",
+    ),
+    ConditionKey.WATCH_DISCONNECTED: AlertDisplayMapping(
+    "Smartwatch Disconnected",
+    MetricType.CONNECTION_STATUS,
+    "",
+    ),
+    ConditionKey.PHONE_BATTERY_LOW: AlertDisplayMapping(
+    "Patient Phone Battery Low",
+    MetricType.BATTERY_LEVEL,
+    "%",
+    ),
+    ConditionKey.WATCH_BATTERY_LOW: AlertDisplayMapping(
+    "Smartwatch Battery Low",
+    MetricType.BATTERY_LEVEL,
+    "%",
+    ),
 }
 
 # Future condition support belongs here. In particular, activity conditions can

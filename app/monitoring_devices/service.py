@@ -5,10 +5,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.time import utc_now
-from app.monitoring_devices.model import MonitoringDevice
+from app.monitoring_devices.model import (
+    DeviceConnectionStatus,
+    MonitoringDevice,
+    MonitoringDeviceType,
+)
 from app.monitoring_devices.schema import DeviceStatusUpsert
 from app.patients.model import ElderlyPatient
 from app.users.model import User, UserRole
+from app.event_evaluations.model import ConditionKey
+from app.monitoring_devices.alerts import set_device_alert_condition
 
 
 class DeviceStatusAccessError(Exception):
@@ -65,7 +71,43 @@ def _find_device_for_update(
     )
 
 
+def _mark_watch_unknown_if_phone_disconnected(
+    db: Session,
+    device: MonitoringDevice,
+) -> None:
+    if (
+        device.device_type is not MonitoringDeviceType.PHONE
+        or device.connection_status
+        is not DeviceConnectionStatus.DISCONNECTED
+    ):
+        return
+
+    watch = db.scalar(
+        select(MonitoringDevice)
+        .where(
+            MonitoringDevice.patient_id == device.patient_id,
+            MonitoringDevice.device_type
+            == MonitoringDeviceType.WATCH,
+        )
+        .with_for_update()
+    )
+
+    if (
+        watch is None
+        or watch.connection_status
+        is DeviceConnectionStatus.UNKNOWN
+    ):
+        return
+
+    now = utc_now()
+
+    watch.connection_status = DeviceConnectionStatus.UNKNOWN
+    watch.status_changed_at = now
+    watch.updated_at = now
+
+
 def _apply_update(
+    db: Session,
     device: MonitoringDevice,
     payload: DeviceStatusUpsert,
 ) -> bool:
@@ -93,6 +135,7 @@ def _apply_update(
 
     if previous_status != payload.connection_status:
         device.status_changed_at = payload.reported_at
+
 
     return True
 
@@ -133,6 +176,10 @@ def upsert_device_status(
 
             db.add(device)
             db.flush()
+
+            _mark_watch_unknown_if_phone_disconnected(db, device,)
+            _sync_device_alerts(db, device,)
+
             db.commit()
 
             return DeviceStatusUpsertResult(
@@ -141,10 +188,20 @@ def upsert_device_status(
             )
 
         applied = _apply_update(
+            db,
             device,
             payload,
+                )
+        if applied:
+            _mark_watch_unknown_if_phone_disconnected(
+            db,
+            device,
         )
 
+        _sync_device_alerts(
+        db,
+        device,
+        )
         # Commit even for stale payloads so any SELECT FOR UPDATE lock
         # is released immediately.
         db.commit()
@@ -172,10 +229,19 @@ def upsert_device_status(
             ) from exc
 
         applied = _apply_update(
-            device,
-            payload,
+                db,
+                device,
+                payload,
+            )
+        if applied:
+                _mark_watch_unknown_if_phone_disconnected(
+                db,
+                device,
+            )
+        _sync_device_alerts(
+        db,
+        device,
         )
-
         db.commit()
 
         return DeviceStatusUpsertResult(
@@ -186,3 +252,43 @@ def upsert_device_status(
     except Exception:
         db.rollback()
         raise
+
+def _sync_device_alerts(
+    db: Session,
+    device: MonitoringDevice,
+) -> None:
+    if device.device_type is MonitoringDeviceType.PHONE:
+        disconnected_condition = ConditionKey.PHONE_DISCONNECTED
+        battery_condition = ConditionKey.PHONE_BATTERY_LOW
+    else:
+        disconnected_condition = ConditionKey.WATCH_DISCONNECTED
+        battery_condition = ConditionKey.WATCH_BATTERY_LOW
+
+    # Connection alert lifecycle.
+    if device.connection_status is DeviceConnectionStatus.DISCONNECTED:
+        set_device_alert_condition(
+            db,
+            patient_id=device.patient_id,
+            condition_key=disconnected_condition,
+            active=True,
+        )
+
+    elif device.connection_status is DeviceConnectionStatus.CONNECTED:
+        set_device_alert_condition(
+            db,
+            patient_id=device.patient_id,
+            condition_key=disconnected_condition,
+            active=False,
+        )
+
+    # UNKNOWN intentionally does nothing.
+    # We cannot claim the device recovered if its state is unknown.
+
+    # Battery alert lifecycle.
+    if device.battery_percent is not None:
+        set_device_alert_condition(
+            db,
+            patient_id=device.patient_id,
+            condition_key=battery_condition,
+            active=device.battery_percent < 20,
+        )

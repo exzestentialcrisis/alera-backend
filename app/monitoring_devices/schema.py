@@ -5,7 +5,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.monitoring_devices.model import (
     DeviceConnectionStatus,
-    DeviceNetworkType,
     MonitoringDeviceType,
 )
 
@@ -33,7 +32,7 @@ class DeviceStatusUpsert(BaseModel):
 
     connection_status: DeviceConnectionStatus
 
-    network_type: DeviceNetworkType = DeviceNetworkType.UNKNOWN
+
 
     reported_at: datetime
 
@@ -71,7 +70,6 @@ class DeviceStatusResponse(BaseModel):
     battery_percent: int | None
 
     connection_status: DeviceConnectionStatus
-    network_type: DeviceNetworkType
 
     reported_at: datetime | None
     last_seen_at: datetime
