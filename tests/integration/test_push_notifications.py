@@ -341,7 +341,7 @@ def test_rollback_and_savepoint_do_not_send(
         ("SPO2", "93", (0, 60), "85"),
     ],
 )
-def test_warning_qualification_sends_once_and_escalation_does_not_repeat(
+def test_warning_qualification_and_critical_escalation_each_send_once(
     db_session, patient, event_payload, transport,
     metric, value, offsets, critical_value,
 ):
@@ -366,8 +366,56 @@ def test_warning_qualification_sends_once_and_escalation_does_not_repeat(
     ingest(value, offsets[-1])
     assert transport.call_count == 1
     ingest(critical_value, offsets[-1] + 30)
-    assert transport.call_count == 1
+    assert transport.call_count == 2
+    escalation = transport.call_args.kwargs["json"]["message"]
+    unit = "BPM" if metric == "HEART_RATE" else "%"
+    separator = " " if metric == "HEART_RATE" else ""
+    assert escalation["notification"] == {
+        "title": (
+            "Critical: High Heart Rate"
+            if metric == "HEART_RATE"
+            else "Critical: Low Blood Oxygen"
+        ),
+        "body": f"Test Patient • {critical_value}{separator}{unit}",
+    }
+    ingest(critical_value, offsets[-1] + 60)
+    assert transport.call_count == 2
     assert len(db_session.scalars(select(Alert)).all()) == 1
+
+
+def test_acknowledged_warning_still_sends_critical_escalation(
+    db_session, patient, event_payload, transport,
+):
+    device(db_session, caregiver(db_session, patient), "synthetic")
+
+    def ingest(reading, offset):
+        create_health_event(
+            db_session,
+            HealthEventCreate(**{
+                **event_payload,
+                "numeric_value": reading,
+                "external_event_id": str(uuid4()),
+                "recorded_at": event_payload["recorded_at"] + timedelta(seconds=offset),
+            }),
+        )
+
+    for offset in (0, 90, 180, 270, 300):
+        ingest("110", offset)
+    alert = db_session.scalar(select(Alert))
+    assert transport.call_count == 1
+
+    alert.status = AlertStatus.ACKNOWLEDGED
+    db_session.commit()
+    ingest("151", 330)
+
+    db_session.refresh(alert)
+    assert transport.call_count == 2
+    assert alert.status is AlertStatus.ACKNOWLEDGED
+    assert alert.severity.value == "CRITICAL"
+    assert transport.call_args.kwargs["json"]["message"]["notification"] == {
+        "title": "Critical: High Heart Rate",
+        "body": "Test Patient • 151 BPM",
+    }
 
 
 def test_invalid_cleanup_preserves_concurrently_refreshed_registration(

@@ -103,6 +103,8 @@ def process_immediate_critical_alert(
         return None
 
     alert = _find_unresolved_alert(db, event, evaluation)
+    notification_required = alert is None
+    is_escalation = False
     if alert is None:
         alert = Alert(
             patient_id=event.patient_id,
@@ -115,13 +117,20 @@ def process_immediate_critical_alert(
         )
         db.add(alert)
         db.flush()
-        queue_alert_notification(db, alert)
-    else:
+    elif alert.severity != EvaluationSeverity.CRITICAL:
         alert.severity = EvaluationSeverity.CRITICAL
         alert.updated_at = utc_now()
+        notification_required = True
+        is_escalation = True
 
     evaluation.alert_id = alert.alert_id
     db.flush()
+    if notification_required:
+        queue_alert_notification(
+            db,
+            alert,
+            include_acknowledged=is_escalation,
+        )
     return alert
 
 

@@ -17,7 +17,7 @@ from app.users.model import AccountStatus, User, UserRole
 logger = logging.getLogger(__name__)
 
 
-def deliver_alert_notifications(bind, alert_ids):
+def deliver_alert_notifications(bind, notification_intents):
     """Best-effort delivery using a separate transaction after alert commit."""
     # Deferred import: alert services register the post-commit notification hook.
     from app.alerts.service import alert_display_payload
@@ -26,18 +26,30 @@ def deliver_alert_notifications(bind, alert_ids):
         sender = FCMSender(get_settings())
         if not sender.configured:
             return
+        include_acknowledged = {}
+        for alert_id, allow_acknowledged in notification_intents:
+            include_acknowledged[alert_id] = (
+                include_acknowledged.get(alert_id, False) or allow_acknowledged
+            )
         with Session(bind=bind) as db:
             alerts = db.scalars(
-                select(Alert).where(
-                    Alert.alert_id.in_(alert_ids), Alert.status == AlertStatus.ACTIVE
-                )
+                select(Alert).where(Alert.alert_id.in_(include_acknowledged))
             ).all()
             for alert in alerts:
-                # Match the enriched API's first triggering evaluation selection.
+                if alert.status is not AlertStatus.ACTIVE and not (
+                    alert.status is AlertStatus.ACKNOWLEDGED
+                    and include_acknowledged[alert.alert_id]
+                ):
+                    continue
+                # Use the evaluation that queued this delivery. New alerts have one
+                # linked evaluation; escalations need the latest Critical reading.
                 evaluation = db.scalar(
                     select(EventEvaluation)
                     .where(EventEvaluation.alert_id == alert.alert_id)
-                    .order_by(EventEvaluation.evaluated_at, EventEvaluation.evaluation_id)
+                    .order_by(
+                        EventEvaluation.evaluated_at.desc(),
+                        EventEvaluation.evaluation_id.desc(),
+                    )
                     .limit(1)
                 )
                 event = db.get(HealthEvent, evaluation.event_id) if evaluation else None

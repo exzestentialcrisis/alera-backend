@@ -178,10 +178,14 @@ e.g. Firebase Cloud Messaging API Admin). The sender uses Google's service-accou
 OAuth flow with the `firebase.messaging` scope and bounded HTTP timeouts. See
 [Firebase HTTP v1 setup](https://firebase.google.com/docs/cloud-messaging/send/v1-api).
 
-Only a new ACTIVE alert from the existing rule flow queues delivery. The outer
-transaction must commit before a separate session selects devices belonging to
-active caregivers/care admins with a current patient assignment. Alert reads,
-updates, reused alerts and rolled-back transactions do not trigger sends.
+An alert queues delivery when it is first created and again if the same unresolved
+Warning case escalates to Critical. The escalation keeps the same alert ID and
+caregiver-handling status, including ACKNOWLEDGED, but its push uses the Critical
+reading that caused the escalation. Later Critical readings on that already-Critical
+case do not repeat the push. The outer transaction must commit before a separate
+session selects devices belonging to active caregivers/care admins with a current
+patient assignment. Alert reads, ordinary updates, non-escalating reused alerts and
+rolled-back transactions do not trigger sends.
 The title identifies severity and alert (for example, “Critical: High Heart Rate”);
 the body shows the patient display name and reading (for example,
 “Alera Test Patient • 154 BPM”). Missing display fields use the generic title
