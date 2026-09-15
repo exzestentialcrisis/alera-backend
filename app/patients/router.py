@@ -85,7 +85,8 @@ def read_patient(
             detail=str(exc),
         ) from exc
 
-router.get(
+
+@router.get(
     "/{patient_id}/monitoring-devices",
     response_model=list[MonitoringDeviceRead],
     summary="List monitoring devices for a patient",
@@ -101,7 +102,6 @@ def read_patient_monitoring_devices(
     db: Session = Depends(get_db),
 ):
     try:
-        # Reuse the existing patient scope check.
         get_patient(db, actor, patient_id)
 
         return list_patient_monitoring_devices(
@@ -114,6 +114,7 @@ def read_patient_monitoring_devices(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
+
 
 @router.patch(
     "/{patient_id}/monitoring-settings",
