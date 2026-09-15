@@ -339,6 +339,36 @@ def test_normalization_allows_warning_in_new_occurrence(db_session, patient):
     assert alerts[1].detected_at == BASE_TIME + timedelta(seconds=360)
 
 
+@pytest.mark.parametrize(
+    "first_status",
+    [AlertStatus.ACTIVE, AlertStatus.ACKNOWLEDGED],
+)
+def test_new_warning_occurrence_does_not_reuse_prior_unresolved_alert(
+    db_session,
+    patient,
+    first_status,
+):
+    qualifying = qualify_warning(db_session, patient)
+    first_alert = db_session.get(
+        Alert,
+        evaluation_for(db_session, qualifying).alert_id,
+    )
+    first_alert.status = first_status
+    db_session.commit()
+    ingest(db_session, patient, "78", 330)
+
+    for offset in (360, 450, 540, 630):
+        ingest(db_session, patient, "110", offset)
+    recurring = ingest(db_session, patient, "110", 660)
+
+    alerts = alerts_for(db_session, patient)
+    assert len(alerts) == 2
+    assert evaluation_for(db_session, recurring).alert_id == alerts[1].alert_id
+    assert alerts[1].alert_id != first_alert.alert_id
+    assert alerts[1].detected_at == BASE_TIME + timedelta(seconds=360)
+    assert first_alert.status is first_status
+
+
 def test_resolved_warning_allows_critical_safety_exception(
     db_session,
     patient,

@@ -64,7 +64,11 @@ def test_warning_to_critical_queues_one_escalation(monkeypatch, status):
     )
     db = Mock()
     queued = Mock()
-    monkeypatch.setattr(alert_service, "_find_unresolved_alert", lambda *_: alert)
+    monkeypatch.setattr(
+        alert_service,
+        "_find_unresolved_occurrence_alert",
+        lambda *_: alert,
+    )
     monkeypatch.setattr(alert_service, "queue_alert_notification", queued)
 
     result = alert_service.process_immediate_critical_alert(
@@ -92,7 +96,11 @@ def test_later_critical_reading_does_not_repeat_notification(monkeypatch):
     )
     db = Mock()
     queued = Mock()
-    monkeypatch.setattr(alert_service, "_find_unresolved_alert", lambda *_: alert)
+    monkeypatch.setattr(
+        alert_service,
+        "_find_unresolved_occurrence_alert",
+        lambda *_: alert,
+    )
     monkeypatch.setattr(alert_service, "queue_alert_notification", queued)
 
     result = alert_service.process_immediate_critical_alert(

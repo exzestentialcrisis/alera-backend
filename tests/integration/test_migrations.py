@@ -278,7 +278,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                 "ix_alerts_patient_status",
                 "ix_alerts_patient_condition_detected",
                 "ix_alerts_detected_at",
-                "uq_alerts_unresolved_patient_condition",
+                "uq_alerts_unresolved_patient_condition_occurrence",
             },
             "alert_actions": {"ix_alert_actions_alert_performed_at"},
             "event_evaluations": {"ix_event_evaluations_alert_id"},
@@ -413,7 +413,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                     "SELECT indexdef FROM pg_indexes "
                     "WHERE tablename = 'alerts' "
                     "AND indexname = "
-                    "'uq_alerts_unresolved_patient_condition'"
+                    "'uq_alerts_unresolved_patient_condition_occurrence'"
                 )
             ).scalar_one()
         assert {"HEART_RATE", "SPO2", "ACTIVITY", "SLEEP"}.issubset(metric_values)
@@ -433,6 +433,9 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "LOG_INTERVENTION",
         ]
         assert "UNIQUE" in partial_index
+        assert "patient_id" in partial_index
+        assert "condition_key" in partial_index
+        assert "detected_at" in partial_index
         assert "ACTIVE" in partial_index
         assert "ACKNOWLEDGED" in partial_index
 

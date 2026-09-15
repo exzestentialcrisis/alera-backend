@@ -14,6 +14,7 @@ from app.core.config import Settings
 from app.core.time import utc_now
 from app.db.database import get_db
 from app.devices.model import CaregiverPushDevice
+from app.event_evaluations.model import EventEvaluation
 from app.health_events.schema import HealthEventCreate
 from app.health_events.service import create_health_event
 from app.household_access.model import CaregiverPatientAssignment
@@ -76,6 +77,12 @@ def headers(user, patient):
         expires_minutes=30,
     )
     return {"Authorization": f"Bearer {token}"}
+
+
+def evaluation_for(db, event):
+    return db.scalar(
+        select(EventEvaluation).where(EventEvaluation.event_id == event.event_id)
+    )
 
 
 def test_registration_reassignment_and_ownership_delete(api, db_session, patient):
@@ -415,6 +422,40 @@ def test_acknowledged_warning_still_sends_critical_escalation(
     assert transport.call_args.kwargs["json"]["message"]["notification"] == {
         "title": "Critical: High Heart Rate",
         "body": "Test Patient • 151 BPM",
+    }
+
+
+def test_new_critical_occurrence_sends_again_while_prior_alert_is_unresolved(
+    db_session, patient, event_payload, transport,
+):
+    device(db_session, caregiver(db_session, patient), "synthetic")
+
+    def ingest(reading, offset):
+        return create_health_event(
+            db_session,
+            HealthEventCreate(**{
+                **event_payload,
+                "numeric_value": reading,
+                "external_event_id": str(uuid4()),
+                "recorded_at": event_payload["recorded_at"]
+                + timedelta(seconds=offset),
+            }),
+        )
+
+    first = ingest("151", 0)
+    first_alert_id = evaluation_for(db_session, first).alert_id
+    assert transport.call_count == 1
+
+    ingest("78", 60)
+    recurring = ingest("160", 120)
+    recurring_alert_id = evaluation_for(db_session, recurring).alert_id
+
+    assert transport.call_count == 2
+    assert recurring_alert_id != first_alert_id
+    assert len(db_session.scalars(select(Alert)).all()) == 2
+    assert transport.call_args.kwargs["json"]["message"]["notification"] == {
+        "title": "Critical: High Heart Rate",
+        "body": "Test Patient • 160 BPM",
     }
 
 

@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import case, func, select
@@ -65,16 +65,19 @@ def alert_display_payload(
     }
 
 
-def _find_unresolved_alert(
+def _find_unresolved_occurrence_alert(
     db: Session,
     event: HealthEvent,
     evaluation: EventEvaluation,
+    detected_at: datetime,
 ) -> Alert | None:
+    """Find the unresolved alert for this physiological occurrence only."""
     return db.scalar(
         select(Alert)
         .where(
             Alert.patient_id == event.patient_id,
             Alert.condition_key == evaluation.condition_key,
+            Alert.detected_at == detected_at,
             Alert.status.in_(
                 (AlertStatus.ACTIVE, AlertStatus.ACKNOWLEDGED)
             ),
@@ -102,7 +105,12 @@ def process_immediate_critical_alert(
     ):
         return None
 
-    alert = _find_unresolved_alert(db, event, evaluation)
+    alert = _find_unresolved_occurrence_alert(
+        db,
+        event,
+        evaluation,
+        tracker.started_at,
+    )
     notification_required = alert is None
     is_escalation = False
     if alert is None:
@@ -157,7 +165,12 @@ def process_persistent_hr_warning(
         return None
 
     evaluation.persistence_met = True
-    alert = _find_unresolved_alert(db, event, evaluation)
+    alert = _find_unresolved_occurrence_alert(
+        db,
+        event,
+        evaluation,
+        tracker.started_at,
+    )
     if alert is None:
         # A terminal alert with the same detected time is durable memory that
         # this serialized tracker occurrence already produced a Warning.
@@ -211,7 +224,12 @@ def process_consecutive_spo2_warning(
     ):
         return None
 
-    alert = _find_unresolved_alert(db, event, evaluation)
+    alert = _find_unresolved_occurrence_alert(
+        db,
+        event,
+        evaluation,
+        tracker.started_at,
+    )
     if (
         tracker.consecutive_event_count < SPO2_WARNING_MEASUREMENT_COUNT
         and (

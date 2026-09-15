@@ -125,13 +125,28 @@ def test_reject_invalid_alert_timestamp_order(
         db_session.commit()
 
 
-def test_reject_second_current_alert_for_patient_condition(db_session, patient):
+def test_reject_second_unresolved_alert_for_same_occurrence(db_session, patient):
     db_session.add(make_alert(patient, status=AlertStatus.ACTIVE))
     db_session.commit()
     db_session.add(make_alert(patient, status=AlertStatus.ACKNOWLEDGED))
 
     with pytest.raises(IntegrityError):
         db_session.commit()
+
+
+def test_allow_unresolved_alerts_for_separate_occurrences(db_session, patient):
+    db_session.add(make_alert(patient, status=AlertStatus.ACTIVE))
+    later = NOW + timedelta(minutes=10)
+    db_session.add(
+        make_alert(
+            patient,
+            status=AlertStatus.ACKNOWLEDGED,
+            detected_at=later,
+            confirmed_at=later + timedelta(minutes=2),
+        )
+    )
+
+    db_session.commit()
 
 
 def test_allow_multiple_historical_resolved_alerts(db_session, patient):

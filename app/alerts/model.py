@@ -39,9 +39,10 @@ class Alert(Base):
         ),
         Index("ix_alerts_detected_at", "detected_at"),
         Index(
-            "uq_alerts_unresolved_patient_condition",
+            "uq_alerts_unresolved_patient_condition_occurrence",
             "patient_id",
             "condition_key",
+            "detected_at",
             unique=True,
             postgresql_where=text(
                 "status IN ('ACTIVE'::alert_status, "

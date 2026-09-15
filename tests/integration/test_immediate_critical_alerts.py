@@ -182,6 +182,45 @@ def test_acknowledged_alert_is_reused_without_reactivation(db_session, patient):
     assert len(unresolved_alerts(db_session, patient, ConditionKey.HR_HIGH)) == 1
 
 
+@pytest.mark.parametrize(
+    "first_status",
+    [AlertStatus.ACTIVE, AlertStatus.ACKNOWLEDGED],
+)
+def test_recurrence_creates_new_alert_while_prior_alert_is_unresolved(
+    db_session,
+    patient,
+    first_status,
+):
+    first = ingest(db_session, patient, MetricType.HEART_RATE, "151")
+    first_alert = db_session.get(Alert, evaluation_for(db_session, first).alert_id)
+    first_alert.status = first_status
+    db_session.commit()
+
+    ingest(
+        db_session,
+        patient,
+        MetricType.HEART_RATE,
+        "78",
+        BASE_TIME + timedelta(seconds=60),
+    )
+    recurring = ingest(
+        db_session,
+        patient,
+        MetricType.HEART_RATE,
+        "160",
+        BASE_TIME + timedelta(seconds=120),
+    )
+    alerts = unresolved_alerts(db_session, patient, ConditionKey.HR_HIGH)
+
+    assert len(alerts) == 2
+    assert evaluation_for(db_session, recurring).alert_id != first_alert.alert_id
+    assert {alert.detected_at for alert in alerts} == {
+        BASE_TIME,
+        BASE_TIME + timedelta(seconds=120),
+    }
+    assert first_alert.status is first_status
+
+
 def test_different_conditions_create_separate_alerts(db_session, patient):
     ingest(db_session, patient, MetricType.HEART_RATE, "151")
     ingest(db_session, patient, MetricType.SPO2, "89")
