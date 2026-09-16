@@ -40,6 +40,10 @@ class ReminderTemplate(Base):
             "missed_after_minutes >= 0",
             name="reminder_missed_after_nonnegative",
         ),
+        CheckConstraint(
+            "due_after_minutes >= 0",
+            name="reminder_due_after_nonnegative",
+        ),
         Index("idx_reminder_templates_created_by", "created_by_user_id"),
         Index("idx_reminder_templates_patient_id", "patient_id"),
         Index("idx_reminder_templates_status", "status"),
@@ -68,7 +72,11 @@ class ReminderTemplate(Base):
     )
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     start_time: Mapped[time] = mapped_column(Time(timezone=False), nullable=False)
+    timezone: Mapped[str] = mapped_column(String, nullable=False)
     schedule_rule: Mapped[str | None] = mapped_column(Text, nullable=True)
+    due_after_minutes: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=15, server_default="15"
+    )
     snooze_allowed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
@@ -119,6 +127,12 @@ class ReminderOccurrence(Base):
         Index("idx_reminder_occurrences_due_at", "due_at"),
         Index("idx_reminder_occurrences_status", "status"),
         Index("idx_reminder_occurrences_template_id", "reminder_template_id"),
+        Index(
+            "uq_reminder_occurrences_template_scheduled_at",
+            "reminder_template_id",
+            "scheduled_at",
+            unique=True,
+        ),
     )
 
     reminder_occurrence_id: Mapped[uuid.UUID] = mapped_column(
