@@ -160,7 +160,12 @@ def test_complete_accepts_due_snoozed_and_missed(
     patient_user, household, owner = patient_context(db_session, patient)
     occurrence, _ = add_reminder(db_session, patient, owner)
     occurrence.status = starting_status
-    occurrence.due_at = NOW + timedelta(days=1) if not late else NOW - timedelta(days=1)
+    reference_time = utc_now()
+    occurrence.due_at = (
+        reference_time + timedelta(days=1)
+        if not late
+        else reference_time - timedelta(days=1)
+    )
     db_session.commit()
     response = request(
         patient_action_app, "POST", f"/api/v1/reminders/{occurrence.reminder_occurrence_id}/complete",
