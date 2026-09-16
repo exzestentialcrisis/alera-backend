@@ -46,10 +46,10 @@ def test_reminder_tables_columns_and_foreign_keys():
     assert _foreign_key_targets(ReminderOccurrence) == {"reminder_templates.reminder_template_id"}
 
     required_action_columns = {
-        "reminder_action_id", "reminder_occurrence_id", "performed_by_user_id", "action_type", "performed_at",
+        "reminder_action_id", "reminder_occurrence_id", "action_type", "performed_at",
     }
     assert all(not ReminderAction.__table__.c[name].nullable for name in required_action_columns)
-    assert all(ReminderAction.__table__.c[name].nullable for name in ("action_note", "previous_status", "new_status", "new_due_at", "metadata", "client_action_id"))
+    assert all(ReminderAction.__table__.c[name].nullable for name in ("performed_by_user_id", "action_note", "previous_status", "new_status", "new_due_at", "metadata", "client_action_id"))
     assert isinstance(ReminderAction.__table__.c.metadata.type, JSONB)
     assert isinstance(ReminderAction.__table__.c.client_action_id.type, UUID)
     assert ReminderAction.__table__.c.client_action_id.type.as_uuid is True

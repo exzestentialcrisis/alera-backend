@@ -178,8 +178,8 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                 "due_at", "status", "created_at", "updated_at",
             },
             "reminder_actions": {
-                "reminder_action_id", "reminder_occurrence_id", "performed_by_user_id",
-                "action_type", "performed_at",
+                "reminder_action_id", "reminder_occurrence_id", "action_type",
+                "performed_at",
             },
         }.items():
             assert all(
@@ -193,8 +193,8 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         assert all(
             reminder_columns["reminder_actions"][column]["nullable"] is True
             for column in (
-                "action_note", "previous_status", "new_status", "new_due_at",
-                "metadata", "client_action_id",
+                "performed_by_user_id", "action_note", "previous_status",
+                "new_status", "new_due_at", "metadata", "client_action_id",
             )
         )
         assert reminder_columns["reminder_actions"]["client_action_id"][
