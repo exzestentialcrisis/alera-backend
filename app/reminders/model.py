@@ -189,8 +189,8 @@ class ReminderAction(Base):
         ForeignKey("reminder_occurrences.reminder_occurrence_id"),
         nullable=False,
     )
-    performed_by_user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False
+    performed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True
     )
     client_action_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True

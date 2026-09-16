@@ -99,7 +99,7 @@ class ReminderActionRead(BaseModel):
     reminder_action_id: UUID
     client_action_id: UUID | None
     reminder_occurrence_id: UUID
-    performed_by_user_id: UUID
+    performed_by_user_id: UUID | None
     action_type: ReminderActionType
     action_note: str | None
     previous_status: ReminderOccurrenceStatus | None
