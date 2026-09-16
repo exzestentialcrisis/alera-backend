@@ -39,6 +39,7 @@ def add_occurrence(
         priority=ReminderPriority.NORMAL,
         start_date=date(2026, 9, 16),
         start_time=time(8),
+        timezone="Asia/Manila",
         missed_after_minutes=30,
     )
     db_session.add(template)
