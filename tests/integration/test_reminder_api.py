@@ -68,6 +68,7 @@ def add_reminder(db_session, patient, creator, *, scheduled_at=NOW, **overrides)
         priority=overrides.pop("priority", ReminderPriority.NORMAL),
         start_date=scheduled_at.date(),
         start_time=scheduled_at.timetz().replace(tzinfo=None),
+        timezone="Asia/Manila",
         **overrides,
     )
     db_session.add(template)

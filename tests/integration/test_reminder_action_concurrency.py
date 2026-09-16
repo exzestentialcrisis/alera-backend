@@ -42,6 +42,7 @@ def make_occurrence(db_session, patient):
         priority=ReminderPriority.NORMAL,
         start_date=ACTION_TIME.date(),
         start_time=ACTION_TIME.time(),
+        timezone="Asia/Manila",
         default_snooze_minutes=10,
     )
     db_session.add(template)

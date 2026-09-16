@@ -75,6 +75,7 @@ def setup_reminder(db_session, patient):
         patient_id=patient.patient_id, created_by_user_id=owner.user_id,
         title="Care reminder", category=ReminderCategory.MEDICATION,
         priority=ReminderPriority.NORMAL, start_date=NOW.date(), start_time=NOW.time(),
+        timezone="Asia/Manila",
     )
     db_session.add(template)
     db_session.flush()

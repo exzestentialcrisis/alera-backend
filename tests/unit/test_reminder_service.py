@@ -90,6 +90,7 @@ def test_reminder_payload_uses_only_the_public_joined_fields():
         priority=ReminderPriority.NORMAL,
         start_date=datetime(2026, 9, 11).date(),
         start_time=datetime(2026, 9, 11, 8).time(),
+        timezone="Asia/Manila",
     )
     occurrence = ReminderOccurrence(
         reminder_occurrence_id=uuid4(),

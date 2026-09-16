@@ -64,8 +64,10 @@ def insert_reminder_action_fixture(connection):
     template_id = connection.execute(
         text(
             "INSERT INTO reminder_templates (patient_id, created_by_user_id, title, category, "
-            "start_date, start_time) VALUES (:patient_id, :admin_id, 'Reminder', 'OTHER', "
-            "CURRENT_DATE, CURRENT_TIME) RETURNING reminder_template_id"
+            "start_date, start_time, timezone) VALUES "
+            "(:patient_id, :admin_id, 'Reminder', 'OTHER', "
+            "CURRENT_DATE, CURRENT_TIME, 'Asia/Manila') "
+            "RETURNING reminder_template_id"
         ),
         {"patient_id": patient_id, "admin_id": admin_id},
     ).scalar_one()
@@ -151,7 +153,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         assert {
             "reminder_template_id", "patient_id", "created_by_user_id", "title",
             "category", "instructions", "priority", "start_date", "start_time",
-            "schedule_rule", "snooze_allowed", "default_snooze_minutes",
+            "timezone", "schedule_rule", "due_after_minutes", "snooze_allowed", "default_snooze_minutes",
             "missed_after_minutes", "notification_channels", "status", "created_at",
             "updated_at", "archived_at",
         } == set(reminder_columns["reminder_templates"])
@@ -168,7 +170,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "reminder_templates": {
                 "reminder_template_id", "patient_id", "created_by_user_id", "title",
                 "category", "priority", "start_date", "start_time", "snooze_allowed",
-                "default_snooze_minutes", "missed_after_minutes",
+                "timezone", "due_after_minutes", "default_snooze_minutes", "missed_after_minutes",
                 "notification_channels", "status", "created_at", "updated_at",
             },
             "reminder_occurrences": {
@@ -292,6 +294,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                 "idx_reminder_occurrences_due_at",
                 "idx_reminder_occurrences_status",
                 "idx_reminder_occurrences_template_id",
+                "uq_reminder_occurrences_template_scheduled_at",
             },
             "reminder_actions": {
                 "idx_reminder_actions_occurrence_id",
@@ -365,6 +368,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         assert {
             "reminder_default_snooze_nonnegative",
             "reminder_missed_after_nonnegative",
+            "reminder_due_after_nonnegative",
         }.issubset(reminder_checks)
 
         with engine.connect() as connection:
