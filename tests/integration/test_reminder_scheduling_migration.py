@@ -63,7 +63,12 @@ def temporary_database(test_database_url: str, prefix: str):
         admin_engine.dispose()
 
 
-def insert_template_fixture(connection, *, title: str = "Legacy reminder"):
+def insert_template_fixture(
+    connection,
+    *,
+    title: str = "Legacy reminder",
+    timezone: str | None = None,
+):
     admin_id, patient_user_id, household_id, patient_id = (
         uuid4() for _ in range(4)
     )
@@ -105,14 +110,29 @@ def insert_template_fixture(connection, *, title: str = "Legacy reminder"):
             "household": household_id,
         },
     )
-    return connection.execute(
-        text(
+    if timezone is None:
+        statement = text(
             "INSERT INTO reminder_templates "
             "(patient_id, created_by_user_id, title, category, start_date, "
             "start_time) VALUES (:patient, :admin, :title, 'OTHER', "
             "CURRENT_DATE, CURRENT_TIME) RETURNING reminder_template_id"
-        ),
-        {"patient": patient_id, "admin": admin_id, "title": title},
+        )
+    else:
+        statement = text(
+            "INSERT INTO reminder_templates "
+            "(patient_id, created_by_user_id, title, category, start_date, "
+            "start_time, timezone) VALUES (:patient, :admin, :title, 'OTHER', "
+            "CURRENT_DATE, CURRENT_TIME, :timezone) "
+            "RETURNING reminder_template_id"
+        )
+    return connection.execute(
+        statement,
+        {
+            "patient": patient_id,
+            "admin": admin_id,
+            "title": title,
+            "timezone": timezone,
+        },
     ).scalar_one()
 
 
@@ -182,7 +202,9 @@ def test_reminder_scheduling_reconciliation_clean_path(test_database_url):
                     )
 
             second_template_id = insert_template_fixture(
-                connection, title="Second reminder"
+                connection,
+                title="Second reminder",
+                timezone="Asia/Manila",
             )
             scheduled_at = "2026-09-16T08:00:00+00:00"
             connection.execute(
