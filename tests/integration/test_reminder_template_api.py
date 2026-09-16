@@ -1,8 +1,10 @@
 import asyncio
+from datetime import datetime, timezone
 from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
 
 from app.auth.security import create_access_token
 from app.core.config import Settings
@@ -10,8 +12,8 @@ from app.db.database import get_db
 from app.household_access.model import CaregiverPatientAssignment
 from app.households.model import Household
 from app.main import create_app
-from app.reminders.enums import ReminderTemplateStatus
-from app.reminders.model import ReminderTemplate
+from app.reminders.enums import ReminderActionType, ReminderOccurrenceStatus, ReminderTemplateStatus
+from app.reminders.model import ReminderAction, ReminderOccurrence, ReminderTemplate
 from app.users.model import User, UserRole
 
 
@@ -117,6 +119,111 @@ def test_assigned_caregiver_creates_normalized_template(
     assert db_session.get(
         ReminderTemplate, UUID(body["reminder_template_id"])
     ) is not None
+
+
+def test_template_saves_materialize_and_reconcile_future_occurrences(
+    reminder_template_app, db_session, patient, monkeypatch
+):
+    """Template changes replace future schedules but retain canceled history."""
+    fixed_now = datetime(2026, 9, 16, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.reminders.template_service.utc_now", lambda: fixed_now)
+    household, _owner, _patient_user, caregiver, _unassigned = setup_caregivers(
+        db_session, patient
+    )
+    auth = headers(caregiver, household.household_id)
+    created = request(
+        reminder_template_app,
+        "POST",
+        "/api/v1/reminder-templates",
+        headers=auth,
+        json=create_payload(
+            patient.patient_id,
+            start_date="2026-09-16",
+            start_time="08:00:00",
+            schedule_rule="FREQ=DAILY",
+        ),
+    )
+    assert created.status_code == 201
+    template_id = UUID(created.json()["reminder_template_id"])
+    assert created.json()["schedule_rule"] == "FREQ=DAILY"
+    assert db_session.scalar(
+        select(func.count(ReminderOccurrence.reminder_occurrence_id)).where(
+            ReminderOccurrence.reminder_template_id == template_id,
+            ReminderOccurrence.status == ReminderOccurrenceStatus.UPCOMING,
+        )
+    ) == 60
+
+    changed = request(
+        reminder_template_app,
+        "PATCH",
+        f"/api/v1/reminder-templates/{template_id}",
+        headers=auth,
+        json={"start_time": "09:00:00", "schedule_rule": "FREQ=WEEKLY;BYDAY=MO,WE,FR"},
+    )
+    assert changed.status_code == 200
+    assert changed.json()["schedule_rule"] == "FREQ=WEEKLY;BYDAY=MO,WE,FR"
+    assert db_session.scalar(
+        select(func.count(ReminderOccurrence.reminder_occurrence_id)).where(
+            ReminderOccurrence.reminder_template_id == template_id,
+            ReminderOccurrence.status == ReminderOccurrenceStatus.CANCELED,
+        )
+    ) == 60
+    assert db_session.scalar(
+        select(func.count(ReminderOccurrence.reminder_occurrence_id)).where(
+            ReminderOccurrence.reminder_template_id == template_id,
+            ReminderOccurrence.status == ReminderOccurrenceStatus.UPCOMING,
+        )
+    ) == 26
+
+    disabled = request(
+        reminder_template_app,
+        "PATCH",
+        f"/api/v1/reminder-templates/{template_id}",
+        headers=auth,
+        json={"status": "DISABLED"},
+    )
+    assert disabled.status_code == 200
+    assert db_session.scalar(
+        select(func.count(ReminderOccurrence.reminder_occurrence_id)).where(
+            ReminderOccurrence.reminder_template_id == template_id,
+            ReminderOccurrence.status == ReminderOccurrenceStatus.UPCOMING,
+        )
+    ) == 0
+
+    enabled = request(
+        reminder_template_app,
+        "PATCH",
+        f"/api/v1/reminder-templates/{template_id}",
+        headers=auth,
+        json={"status": "ACTIVE"},
+    )
+    assert enabled.status_code == 200
+    assert db_session.scalar(
+        select(func.count(ReminderOccurrence.reminder_occurrence_id)).where(
+            ReminderOccurrence.reminder_template_id == template_id,
+            ReminderOccurrence.status == ReminderOccurrenceStatus.UPCOMING,
+        )
+    ) == 26
+    assert db_session.scalar(
+        select(func.count(ReminderAction.reminder_action_id)).where(
+            ReminderAction.action_type == ReminderActionType.CANCEL,
+            ReminderAction.action_metadata["source"].astext == "template_reconciliation",
+        )
+    ) == 86
+
+    archived = request(
+        reminder_template_app,
+        "POST",
+        f"/api/v1/reminder-templates/{template_id}/archive",
+        headers=auth,
+    )
+    assert archived.status_code == 200
+    assert db_session.scalar(
+        select(func.count(ReminderOccurrence.reminder_occurrence_id)).where(
+            ReminderOccurrence.reminder_template_id == template_id,
+            ReminderOccurrence.status == ReminderOccurrenceStatus.UPCOMING,
+        )
+    ) == 0
 
 
 @pytest.mark.parametrize("actor_name", ["owner", "patient_user"])

@@ -10,6 +10,7 @@ from app.reminders.enums import (
     ReminderPriority,
     ReminderTemplateStatus,
 )
+from app.reminders.scheduling import normalize_schedule_rule
 
 
 TITLE_MAX_LENGTH = 255
@@ -34,6 +35,7 @@ class _ReminderTemplateFields(BaseModel):
     start_date: date
     start_time: time
     timezone: str = Field(min_length=1, max_length=TIMEZONE_MAX_LENGTH)
+    schedule_rule: str | None = None
     due_after_minutes: int = Field(default=15, ge=0, le=10080)
     snooze_allowed: bool = True
     default_snooze_minutes: int = Field(default=10, ge=0, le=1440)
@@ -72,6 +74,14 @@ class _ReminderTemplateFields(BaseModel):
             raise ValueError("timezone must be a valid IANA timezone") from exc
         return value
 
+    @field_validator("schedule_rule")
+    @classmethod
+    def normalize_schedule(cls, value: str | None) -> str | None:
+        try:
+            return normalize_schedule_rule(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
     @model_validator(mode="after")
     def validate_snooze_configuration(self):
         if self.snooze_allowed and self.default_snooze_minutes < 1:
@@ -95,6 +105,7 @@ class ReminderTemplateUpdate(BaseModel):
     start_date: date | None = None
     start_time: time | None = None
     timezone: str | None = Field(default=None, min_length=1, max_length=TIMEZONE_MAX_LENGTH)
+    schedule_rule: str | None = None
     due_after_minutes: int | None = Field(default=None, ge=0, le=10080)
     snooze_allowed: bool | None = None
     default_snooze_minutes: int | None = Field(default=None, ge=0, le=1440)
@@ -135,6 +146,14 @@ class ReminderTemplateUpdate(BaseModel):
         except ZoneInfoNotFoundError as exc:
             raise ValueError("timezone must be a valid IANA timezone") from exc
         return value
+
+    @field_validator("schedule_rule")
+    @classmethod
+    def normalize_schedule(cls, value: str | None) -> str | None:
+        try:
+            return normalize_schedule_rule(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
     @field_validator("status")
     @classmethod
