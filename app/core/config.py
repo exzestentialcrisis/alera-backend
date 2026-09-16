@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     alera_jwt_secret: str | None = None
     alera_jwt_access_token_minutes: int = 60
 
+    reminder_lifecycle_secret: SecretStr | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -14,6 +14,7 @@ from app.auth.router import router as auth_router
 from app.monitoring_devices.router import router as monitoring_device_router
 from app.reminders.router import router as reminder_router
 from app.reminders.template_router import router as reminder_template_router
+from app.reminders.execution_router import router as reminder_execution_router
 from app.monitoring_devices.runner import (
     device_liveness_loop,
     stop_device_liveness_task,
@@ -54,6 +55,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(patient_router)
     application.include_router(reminder_router)
     application.include_router(reminder_template_router)
+    application.include_router(reminder_execution_router)
 
     @application.get("/health")
     async def health_check() -> dict[str, str]:

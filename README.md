@@ -16,6 +16,20 @@ The migration that adds `HR_NORMAL` and `SPO2_NORMAL` is partially irreversible:
 its downgrade retains those PostgreSQL enum values because removing enum members is
 unsafe. Migration tests verify that documented behavior.
 
+## Reminder lifecycle execution
+
+Configure `REMINDER_LIFECYCLE_SECRET` with a long random value. A trusted external
+scheduler can then advance due and missed reminders with:
+
+```text
+POST /api/v1/internal/reminders/process-lifecycle
+X-Alera-Maintenance-Secret: <REMINDER_LIFECYCLE_SECRET>
+```
+
+Optional `batch_size` and `max_batches` query parameters are bounded by the API.
+The endpoint uses the server's current UTC time, commits each batch independently,
+and is safe to retry. Do not reuse `ALERA_JWT_SECRET` for this endpoint.
+
 ## Caregiver authentication and demo seed
 
 Caregivers and care admins authenticate within a household using
