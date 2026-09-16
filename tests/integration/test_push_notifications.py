@@ -401,7 +401,7 @@ def test_warning_qualification_and_critical_escalation_each_send_once(
         "title": (
             "Critical: High Heart Rate"
             if metric == "HEART_RATE"
-            else "Critical: Low Blood Oxygen"
+            else "Critical: Low SpO₂"
         ),
         "body": f"Test Patient • {critical_value}{separator}{unit}",
     }
