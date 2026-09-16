@@ -81,9 +81,13 @@ class FCMSender:
                 request.session.close()
         return self.credentials.token
 
-    def send(
-        self, token: str, *, alert_id, patient_id,
-        title: str = DEFAULT_TITLE, body: str = DEFAULT_BODY,
+    def _send_message(
+        self,
+        token: str,
+        *,
+        title: str,
+        body: str,
+        data: dict[str, str],
     ) -> bool:
         """Return True only for a definitively invalid device registration."""
         if not self.configured:
@@ -100,11 +104,7 @@ class FCMSender:
                             "title": title,
                             "body": body,
                         },
-                        "data": {
-                            "type": "ALERT",
-                            "alert_id": str(alert_id),
-                            "patient_id": str(patient_id),
-                        },
+                        "data": data,
                     }
                 },
                 timeout=10,
@@ -125,3 +125,40 @@ class FCMSender:
         except Exception:
             logger.warning("FCM delivery unavailable.")
             return False
+
+    def send(
+        self, token: str, *, alert_id, patient_id,
+        title: str = DEFAULT_TITLE, body: str = DEFAULT_BODY,
+    ) -> bool:
+        return self._send_message(
+            token,
+            title=title,
+            body=body,
+            data={
+                "type": "ALERT",
+                "alert_id": str(alert_id),
+                "patient_id": str(patient_id),
+            },
+        )
+
+    def send_reminder(
+        self,
+        token: str,
+        *,
+        occurrence_id,
+        template_id,
+        patient_id,
+        title: str,
+        body: str,
+    ) -> bool:
+        return self._send_message(
+            token,
+            title=title,
+            body=body,
+            data={
+                "type": "REMINDER",
+                "occurrence_id": str(occurrence_id),
+                "template_id": str(template_id),
+                "patient_id": str(patient_id),
+            },
+        )
