@@ -117,11 +117,13 @@ def test_spo2_94_is_normal_and_resets_occurrence(db_session, patient):
     assert tracker.consecutive_event_count == 0
 
 
-def test_spo2_89_creates_immediate_critical_alert(db_session, patient):
-    event = ingest(db_session, patient, "89", 0)
+def test_two_spo2_critical_samples_create_alert(db_session, patient):
+    first = ingest(db_session, patient, "89", 0)
+    event = ingest(db_session, patient, "85", 15)
     alert = alerts_for(db_session, patient)[0]
 
     assert alert.severity is EvaluationSeverity.CRITICAL
+    assert evaluation_for(db_session, first).alert_id is None
     assert evaluation_for(db_session, event).alert_id == alert.alert_id
     assert tracker_for(db_session, patient).consecutive_event_count == 0
 
@@ -254,7 +256,8 @@ def test_warning_to_critical_reuses_and_escalates_alert(
         alert.status = AlertStatus.ACKNOWLEDGED
         db_session.commit()
 
-    critical = ingest(db_session, patient, "89", 120)
+    first_critical = ingest(db_session, patient, "89", 120)
+    critical = ingest(db_session, patient, "85", 135)
     db_session.refresh(alert)
 
     assert len(alerts_for(db_session, patient)) == 1
@@ -262,6 +265,7 @@ def test_warning_to_critical_reuses_and_escalates_alert(
     assert alert.status is (
         AlertStatus.ACKNOWLEDGED if acknowledged else AlertStatus.ACTIVE
     )
+    assert evaluation_for(db_session, first_critical).alert_id is None
     assert evaluation_for(db_session, critical).alert_id == alert.alert_id
 
 
@@ -270,7 +274,8 @@ def test_critical_before_second_candidate_prevents_warning_duplicate(
     patient,
 ):
     first = ingest(db_session, patient, "92", 0)
-    critical = ingest(db_session, patient, "89", 210)
+    ingest(db_session, patient, "89", 210)
+    critical = ingest(db_session, patient, "85", 225)
     later = ingest(db_session, patient, "93", 240)
     alert = alerts_for(db_session, patient)[0]
 
@@ -286,13 +291,15 @@ def test_critical_followed_by_warning_links_without_downgrade(
     db_session,
     patient,
 ):
-    critical = ingest(db_session, patient, "89", 0)
+    first_critical = ingest(db_session, patient, "89", 0)
+    critical = ingest(db_session, patient, "85", 15)
     warning = ingest(db_session, patient, "92", 60)
     alert = alerts_for(db_session, patient)[0]
 
     assert alert.severity is EvaluationSeverity.CRITICAL
     assert evaluation_for(db_session, warning).alert_id == alert.alert_id
     assert evaluation_for(db_session, warning).persistence_met is True
+    assert evaluation_for(db_session, first_critical).alert_id is None
     assert evaluation_for(db_session, critical).alert_id == alert.alert_id
 
 
@@ -366,11 +373,13 @@ def test_resolved_warning_allows_critical_safety_exception(
     warning = db_session.get(Alert, evaluation_for(db_session, second).alert_id)
     resolve_alert(db_session, warning)
 
-    critical = ingest(db_session, patient, "89", 120)
+    first_critical = ingest(db_session, patient, "89", 120)
+    critical = ingest(db_session, patient, "85", 135)
     alerts = alerts_for(db_session, patient)
 
     assert len(alerts) == 2
     assert alerts[1].severity is EvaluationSeverity.CRITICAL
+    assert evaluation_for(db_session, first_critical).alert_id is None
     assert evaluation_for(db_session, critical).alert_id == alerts[1].alert_id
 
 

@@ -1,11 +1,13 @@
-from datetime import datetime, timedelta
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from decimal import Decimal
 import enum
 import hashlib
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.condition_trackers.hr_rules import hr_recovery_confirmed
 from app.condition_trackers.model import ConditionTracker
 from app.core.time import utc_now
 from app.event_evaluations.model import (
@@ -15,6 +17,7 @@ from app.event_evaluations.model import (
     MonitoringState,
 )
 from app.health_events.model import HealthEvent, MetricType, ValidationStatus
+from app.patients.model import ElderlyPatient
 
 RESOLVABLE_CONDITIONS: dict[MetricType, list[ConditionKey]] = {
     MetricType.HEART_RATE: [
@@ -50,6 +53,7 @@ class TrackerUpdateIgnoredReason(str, enum.Enum):
     STALE_EVENT = "STALE_EVENT"
     EQUAL_TIMESTAMP_LOWER_PRIORITY = "EQUAL_TIMESTAMP_LOWER_PRIORITY"
     NORMAL_RESOLUTION = "NORMAL_RESOLUTION"
+    RECOVERY_PENDING = "RECOVERY_PENDING"
     NO_RESOLVABLE_CONDITION = "NO_RESOLVABLE_CONDITION"
     INELIGIBLE_VALIDATION_STATUS = "INELIGIBLE_VALIDATION_STATUS"
 
@@ -187,9 +191,7 @@ def update_condition_tracker(
             active=True,
             started_at=event.recorded_at,
             last_seen_at=event.recorded_at,
-            confirmed_at=(
-                now if evaluation.new_state == MonitoringState.CRITICAL else None
-            ),
+            confirmed_at=None,
             consecutive_event_count=consecutive_event_count,
         )
 
@@ -247,12 +249,6 @@ def update_condition_tracker(
         tracker.active = True
         tracker.updated_at = now
 
-        if (
-            tracker.confirmed_at is None
-            and evaluation.new_state == MonitoringState.CRITICAL
-        ):
-            tracker.confirmed_at = now
-
     db.flush()
 
     return ConditionTrackerUpdateResult(
@@ -276,8 +272,15 @@ def resolve_metric_conditions(
             ignored_reason=TrackerUpdateIgnoredReason.NO_RESOLVABLE_CONDITION,
         )
 
-    trackers: list[ConditionTracker] = []
+    resolved_trackers: list[ConditionTracker] = []
     ignored_reasons: list[TrackerUpdateIgnoredReason] = []
+    touched = False
+    recovery_pending = False
+    patient = (
+        db.get(ElderlyPatient, event.patient_id)
+        if event.metric_type == MetricType.HEART_RATE
+        else None
+    )
     for condition_key in sorted(condition_keys, key=lambda key: key.value):
         _lock_tracker_key(db, event.patient_id, condition_key)
         tracker = _get_tracker(db, event, condition_key)
@@ -295,7 +298,7 @@ def resolve_metric_conditions(
                 last_seen_at=event.recorded_at,
             )
             db.add(tracker)
-            trackers.append(tracker)
+            touched = True
         else:
             ignored_reason = _ignored_ordering_reason(
                 db,
@@ -306,20 +309,42 @@ def resolve_metric_conditions(
             if ignored_reason is not None:
                 ignored_reasons.append(ignored_reason)
                 continue
-            tracker.active = False
-            tracker.consecutive_event_count = 0
+
+            should_resolve = True
+            if event.metric_type == MetricType.HEART_RATE and tracker.active:
+                if patient is None:
+                    raise ValueError("Patient not found")
+                should_resolve = hr_recovery_confirmed(
+                    db,
+                    patient_id=event.patient_id,
+                    observed_at=event.recorded_at,
+                    normal_min=Decimal(patient.normal_hr_min),
+                    normal_max=Decimal(patient.normal_hr_max),
+                )
+
+            if should_resolve:
+                if tracker.active:
+                    resolved_trackers.append(tracker)
+                tracker.active = False
+                tracker.consecutive_event_count = 0
+            else:
+                recovery_pending = True
             tracker.last_event_id = event.event_id
             tracker.last_seen_at = event.recorded_at
             tracker.updated_at = now
-            trackers.append(tracker)
+            touched = True
 
     db.flush()
 
-    if trackers:
+    if touched:
         return ConditionTrackerUpdateResult(
             applied=True,
-            resolved_trackers=tuple(trackers),
-            ignored_reason=TrackerUpdateIgnoredReason.NORMAL_RESOLUTION,
+            resolved_trackers=tuple(resolved_trackers),
+            ignored_reason=(
+                TrackerUpdateIgnoredReason.RECOVERY_PENDING
+                if recovery_pending
+                else TrackerUpdateIgnoredReason.NORMAL_RESOLUTION
+            ),
         )
     return ConditionTrackerUpdateResult(
         applied=False,

@@ -71,17 +71,25 @@ def unresolved_alerts(db, patient, condition=None):
     ("metric_type", "value", "condition"),
     [
         (MetricType.HEART_RATE, "151", ConditionKey.HR_HIGH),
+        (MetricType.HEART_RATE, "39", ConditionKey.HR_LOW),
         (MetricType.SPO2, "89", ConditionKey.SPO2_LOW),
     ],
 )
-def test_realtime_critical_event_creates_and_links_alert(
+def test_two_realtime_critical_events_create_and_link_alert(
     db_session,
     patient,
     metric_type,
     value,
     condition,
 ):
-    event = ingest(db_session, patient, metric_type, value)
+    first = ingest(db_session, patient, metric_type, value)
+    event = ingest(
+        db_session,
+        patient,
+        metric_type,
+        value,
+        BASE_TIME + timedelta(seconds=15),
+    )
     evaluation = evaluation_for(db_session, event)
     tracker = db_session.scalar(
         select(ConditionTracker).where(
@@ -91,7 +99,8 @@ def test_realtime_critical_event_creates_and_links_alert(
     )
     alerts = unresolved_alerts(db_session, patient, condition)
 
-    assert db_session.scalar(select(func.count(HealthEvent.event_id))) == 1
+    assert db_session.scalar(select(func.count(HealthEvent.event_id))) == 2
+    assert evaluation_for(db_session, first).alert_id is None
     assert evaluation.severity is EvaluationSeverity.CRITICAL
     assert evaluation.condition_key is condition
     assert tracker.active is True
@@ -108,6 +117,7 @@ def test_realtime_critical_event_creates_and_links_alert(
     ("metric_type", "value"),
     [
         (MetricType.HEART_RATE, "150"),
+        (MetricType.HEART_RATE, "40"),
         (MetricType.SPO2, "90"),
     ],
 )
@@ -127,6 +137,7 @@ def test_critical_boundary_does_not_create_alert(
     ("metric_type", "values", "condition"),
     [
         (MetricType.HEART_RATE, ("151", "165"), ConditionKey.HR_HIGH),
+        (MetricType.HEART_RATE, ("39", "35"), ConditionKey.HR_LOW),
         (MetricType.SPO2, ("89", "85"), ConditionKey.SPO2_LOW),
     ],
 )
@@ -143,7 +154,14 @@ def test_repeated_critical_events_reuse_one_alert(
         patient,
         metric_type,
         values[1],
-        BASE_TIME + timedelta(seconds=1),
+        BASE_TIME + timedelta(seconds=15),
+    )
+    third = ingest(
+        db_session,
+        patient,
+        metric_type,
+        values[1],
+        BASE_TIME + timedelta(seconds=30),
     )
     alerts = unresolved_alerts(db_session, patient, condition)
     tracker_count = db_session.scalar(
@@ -154,17 +172,25 @@ def test_repeated_critical_events_reuse_one_alert(
         )
     )
 
-    assert db_session.scalar(select(func.count(HealthEvent.event_id))) == 2
-    assert db_session.scalar(select(func.count(EventEvaluation.evaluation_id))) == 2
+    assert db_session.scalar(select(func.count(HealthEvent.event_id))) == 3
+    assert db_session.scalar(select(func.count(EventEvaluation.evaluation_id))) == 3
     assert tracker_count == 1
     assert len(alerts) == 1
-    assert evaluation_for(db_session, first).alert_id == alerts[0].alert_id
+    assert evaluation_for(db_session, first).alert_id is None
     assert evaluation_for(db_session, second).alert_id == alerts[0].alert_id
+    assert evaluation_for(db_session, third).alert_id == alerts[0].alert_id
 
 
 def test_acknowledged_alert_is_reused_without_reactivation(db_session, patient):
     first = ingest(db_session, patient, MetricType.HEART_RATE, "151")
-    alert = db_session.get(Alert, evaluation_for(db_session, first).alert_id)
+    confirmed = ingest(
+        db_session,
+        patient,
+        MetricType.HEART_RATE,
+        "155",
+        BASE_TIME + timedelta(seconds=15),
+    )
+    alert = db_session.get(Alert, evaluation_for(db_session, confirmed).alert_id)
     alert.status = AlertStatus.ACKNOWLEDGED
     db_session.commit()
 
@@ -173,7 +199,7 @@ def test_acknowledged_alert_is_reused_without_reactivation(db_session, patient):
         patient,
         MetricType.HEART_RATE,
         "160",
-        BASE_TIME + timedelta(seconds=1),
+        BASE_TIME + timedelta(seconds=30),
     )
     db_session.refresh(alert)
 
@@ -191,24 +217,39 @@ def test_recurrence_creates_new_alert_while_prior_alert_is_unresolved(
     patient,
     first_status,
 ):
-    first = ingest(db_session, patient, MetricType.HEART_RATE, "151")
+    ingest(db_session, patient, MetricType.HEART_RATE, "151")
+    first = ingest(
+        db_session,
+        patient,
+        MetricType.HEART_RATE,
+        "155",
+        BASE_TIME + timedelta(seconds=15),
+    )
     first_alert = db_session.get(Alert, evaluation_for(db_session, first).alert_id)
     first_alert.status = first_status
     db_session.commit()
 
+    for offset in range(30, 135, 15):
+        ingest(
+            db_session,
+            patient,
+            MetricType.HEART_RATE,
+            "78",
+            BASE_TIME + timedelta(seconds=offset),
+        )
     ingest(
         db_session,
         patient,
         MetricType.HEART_RATE,
-        "78",
-        BASE_TIME + timedelta(seconds=60),
+        "160",
+        BASE_TIME + timedelta(seconds=150),
     )
     recurring = ingest(
         db_session,
         patient,
         MetricType.HEART_RATE,
         "160",
-        BASE_TIME + timedelta(seconds=120),
+        BASE_TIME + timedelta(seconds=165),
     )
     alerts = unresolved_alerts(db_session, patient, ConditionKey.HR_HIGH)
 
@@ -216,14 +257,28 @@ def test_recurrence_creates_new_alert_while_prior_alert_is_unresolved(
     assert evaluation_for(db_session, recurring).alert_id != first_alert.alert_id
     assert {alert.detected_at for alert in alerts} == {
         BASE_TIME,
-        BASE_TIME + timedelta(seconds=120),
+        BASE_TIME + timedelta(seconds=150),
     }
     assert first_alert.status is first_status
 
 
 def test_different_conditions_create_separate_alerts(db_session, patient):
     ingest(db_session, patient, MetricType.HEART_RATE, "151")
+    ingest(
+        db_session,
+        patient,
+        MetricType.HEART_RATE,
+        "155",
+        BASE_TIME + timedelta(seconds=15),
+    )
     ingest(db_session, patient, MetricType.SPO2, "89")
+    ingest(
+        db_session,
+        patient,
+        MetricType.SPO2,
+        "85",
+        BASE_TIME + timedelta(seconds=15),
+    )
 
     assert {
         alert.condition_key for alert in unresolved_alerts(db_session, patient)
@@ -231,7 +286,14 @@ def test_different_conditions_create_separate_alerts(db_session, patient):
 
 
 def test_stale_critical_event_does_not_link_or_touch_alert(db_session, patient):
-    current = ingest(db_session, patient, MetricType.HEART_RATE, "151")
+    ingest(db_session, patient, MetricType.HEART_RATE, "151")
+    current = ingest(
+        db_session,
+        patient,
+        MetricType.HEART_RATE,
+        "155",
+        BASE_TIME + timedelta(seconds=15),
+    )
     alert = db_session.get(Alert, evaluation_for(db_session, current).alert_id)
     original_updated_at = alert.updated_at
 
@@ -253,7 +315,14 @@ def test_equal_timestamp_lower_priority_event_does_not_touch_alert(
     db_session,
     patient,
 ):
-    critical = ingest(db_session, patient, MetricType.HEART_RATE, "151")
+    ingest(db_session, patient, MetricType.HEART_RATE, "151")
+    critical = ingest(
+        db_session,
+        patient,
+        MetricType.HEART_RATE,
+        "155",
+        BASE_TIME + timedelta(seconds=15),
+    )
     alert = db_session.get(Alert, evaluation_for(db_session, critical).alert_id)
     original_updated_at = alert.updated_at
 
@@ -262,7 +331,7 @@ def test_equal_timestamp_lower_priority_event_does_not_touch_alert(
         patient,
         MetricType.HEART_RATE,
         "110",
-        BASE_TIME,
+        BASE_TIME + timedelta(seconds=15),
     )
     db_session.refresh(alert)
 
@@ -315,7 +384,7 @@ def test_identical_external_event_retry_is_alert_idempotent(db_session, patient)
     assert second.event_id == first.event_id
     assert db_session.scalar(select(func.count(HealthEvent.event_id))) == 1
     assert db_session.scalar(select(func.count(EventEvaluation.evaluation_id))) == 1
-    assert db_session.scalar(select(func.count(Alert.alert_id))) == 1
+    assert db_session.scalar(select(func.count(Alert.alert_id))) == 0
 
 
 def test_alert_service_failure_rolls_back_pipeline(
@@ -352,12 +421,12 @@ def concurrent_ingest(engine, patient_id, specifications):
     def worker(specification):
         session = factory()
         try:
+            values = {"recorded_at": BASE_TIME, **specification}
             event = HealthEventCreate(
                 patient_id=patient_id,
                 external_event_id=f"critical-concurrent-{uuid4()}",
                 validation_status=ValidationStatus.VALID_REALTIME,
-                recorded_at=BASE_TIME,
-                **specification,
+                **values,
             )
             barrier.wait()
             return create_health_event(session, event).event_id
@@ -373,12 +442,21 @@ def test_concurrent_first_critical_events_create_one_alert(
     db_session,
     patient,
 ):
+    ingest(db_session, patient, MetricType.HEART_RATE, "151")
     event_ids = concurrent_ingest(
         integration_engine,
         patient.patient_id,
         [
-            {"metric_type": MetricType.HEART_RATE, "numeric_value": "151"},
-            {"metric_type": MetricType.HEART_RATE, "numeric_value": "165"},
+            {
+                "metric_type": MetricType.HEART_RATE,
+                "numeric_value": "151",
+                "recorded_at": BASE_TIME + timedelta(seconds=15),
+            },
+            {
+                "metric_type": MetricType.HEART_RATE,
+                "numeric_value": "165",
+                "recorded_at": BASE_TIME + timedelta(seconds=16),
+            },
         ],
     )
     db_session.expire_all()
@@ -404,12 +482,22 @@ def test_concurrent_different_critical_conditions_create_separate_alerts(
     db_session,
     patient,
 ):
+    ingest(db_session, patient, MetricType.HEART_RATE, "151")
+    ingest(db_session, patient, MetricType.SPO2, "89")
     concurrent_ingest(
         integration_engine,
         patient.patient_id,
         [
-            {"metric_type": MetricType.HEART_RATE, "numeric_value": "151"},
-            {"metric_type": MetricType.SPO2, "numeric_value": "89"},
+            {
+                "metric_type": MetricType.HEART_RATE,
+                "numeric_value": "155",
+                "recorded_at": BASE_TIME + timedelta(seconds=15),
+            },
+            {
+                "metric_type": MetricType.SPO2,
+                "numeric_value": "85",
+                "recorded_at": BASE_TIME + timedelta(seconds=15),
+            },
         ],
     )
     db_session.expire_all()

@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Numeric,
     String,
     Text,
@@ -38,6 +39,14 @@ class ValidationStatus(str, enum.Enum):
 
 class HealthEvent(Base):
     __tablename__ = "health_events"
+    __table_args__ = (
+        Index(
+            "ix_health_events_patient_metric_recorded",
+            "patient_id",
+            "metric_type",
+            "recorded_at",
+        ),
+    )
 
     event_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

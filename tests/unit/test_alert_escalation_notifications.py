@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
@@ -48,6 +48,7 @@ def critical_context(status, severity):
         active=True,
         last_event_id=event.event_id,
         started_at=BASE_TIME,
+        confirmed_at=None,
     )
     result = ConditionTrackerUpdateResult(applied=True, tracker=tracker)
     return event, evaluation, alert, result
@@ -69,6 +70,7 @@ def test_warning_to_critical_queues_one_escalation(monkeypatch, status):
         "_find_unresolved_occurrence_alert",
         lambda *_: alert,
     )
+    monkeypatch.setattr(alert_service, "_critical_confirmation_met", lambda *_: True)
     monkeypatch.setattr(alert_service, "queue_alert_notification", queued)
 
     result = alert_service.process_immediate_critical_alert(
@@ -101,6 +103,7 @@ def test_later_critical_reading_does_not_repeat_notification(monkeypatch):
         "_find_unresolved_occurrence_alert",
         lambda *_: alert,
     )
+    monkeypatch.setattr(alert_service, "_critical_confirmation_met", lambda *_: True)
     monkeypatch.setattr(alert_service, "queue_alert_notification", queued)
 
     result = alert_service.process_immediate_critical_alert(
@@ -113,3 +116,42 @@ def test_later_critical_reading_does_not_repeat_notification(monkeypatch):
     assert result is alert
     assert evaluation.alert_id == alert.alert_id
     queued.assert_not_called()
+
+
+def test_critical_confirmation_accepts_prior_critical_after_ten_seconds():
+    event, evaluation, _, _ = critical_context(
+        AlertStatus.ACTIVE,
+        EvaluationSeverity.CRITICAL,
+    )
+    db = Mock()
+    db.execute.return_value.all.return_value = [
+        (
+            event.recorded_at - timedelta(seconds=15),
+            evaluation.condition_key,
+            EvaluationSeverity.CRITICAL,
+        )
+    ]
+
+    assert alert_service._critical_confirmation_met(db, event, evaluation) is True
+
+
+def test_normal_sample_between_critical_samples_cancels_confirmation():
+    event, evaluation, _, _ = critical_context(
+        AlertStatus.ACTIVE,
+        EvaluationSeverity.CRITICAL,
+    )
+    db = Mock()
+    db.execute.return_value.all.return_value = [
+        (
+            event.recorded_at - timedelta(seconds=5),
+            ConditionKey.HR_NORMAL,
+            EvaluationSeverity.INFO,
+        ),
+        (
+            event.recorded_at - timedelta(seconds=15),
+            evaluation.condition_key,
+            EvaluationSeverity.CRITICAL,
+        ),
+    ]
+
+    assert alert_service._critical_confirmation_met(db, event, evaluation) is False

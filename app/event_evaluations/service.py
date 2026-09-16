@@ -80,6 +80,16 @@ def evaluate_heart_rate_event(
             f"Heart rate {value} bpm exceeded the critical " "threshold of 150 bpm."
         )
 
+    elif value < Decimal("40"):
+        condition = ConditionKey.HR_LOW
+        threshold = Decimal("40")
+        new_state = MonitoringState.CRITICAL
+        severity = EvaluationSeverity.CRITICAL
+        reason = (
+            f"Heart rate {value} bpm fell below the critical "
+            "threshold of 40 bpm."
+        )
+
     elif value > Decimal(patient.normal_hr_max):
         condition = ConditionKey.HR_HIGH
         threshold = Decimal(patient.normal_hr_max)

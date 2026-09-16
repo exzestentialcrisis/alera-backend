@@ -22,12 +22,14 @@ DEMO_HOUSEHOLD_ID = UUID("33333333-3333-3333-3333-333333333333")
 DEMO_PATIENT_ID = UUID("a076ecdb-ae38-4f84-b490-e714977027ee")
 DEMO_HOUSEHOLD_CODE = "4V8F-29HC"
 DEMO_PATIENT_DISPLAY_NAME = "Alera Test Patient"
-DEMO_EVENT_PREFIX = "alera-demo-v2"
+DEMO_EVENT_PREFIX = "alera-demo-v3"
 DEMO_EVENT_OFFSETS = {
     "hr-normal": timedelta(),
-    "hr-critical": timedelta(minutes=1),
+    "hr-critical-candidate": timedelta(minutes=1),
+    "hr-critical": timedelta(minutes=1, seconds=15),
     "spo2-normal": timedelta(minutes=2),
-    "spo2-critical": timedelta(minutes=3),
+    "spo2-critical-candidate": timedelta(minutes=3),
+    "spo2-critical": timedelta(minutes=3, seconds=15),
 }
 
 
@@ -111,7 +113,7 @@ def _demo_events(db: Session, patient: ElderlyPatient) -> tuple[HealthEventCreat
     common = {
         "patient_id": patient.patient_id,
         "validation_status": ValidationStatus.VALID_REALTIME,
-        "raw_payload": {"demo": True, "seed": "seed_demo_data.py", "version": 2},
+        "raw_payload": {"demo": True, "seed": "seed_demo_data.py", "version": 3},
     }
     return (
         HealthEventCreate(
@@ -121,6 +123,14 @@ def _demo_events(db: Session, patient: ElderlyPatient) -> tuple[HealthEventCreat
             numeric_value="78",
             metric_unit="BPM",
             recorded_at=start + DEMO_EVENT_OFFSETS["hr-normal"],
+        ),
+        HealthEventCreate(
+            **common,
+            external_event_id=f"{DEMO_EVENT_PREFIX}-hr-critical-candidate",
+            metric_type=MetricType.HEART_RATE,
+            numeric_value="152",
+            metric_unit="BPM",
+            recorded_at=start + DEMO_EVENT_OFFSETS["hr-critical-candidate"],
         ),
         HealthEventCreate(
             **common,
@@ -137,6 +147,14 @@ def _demo_events(db: Session, patient: ElderlyPatient) -> tuple[HealthEventCreat
             numeric_value="97",
             metric_unit="%",
             recorded_at=start + DEMO_EVENT_OFFSETS["spo2-normal"],
+        ),
+        HealthEventCreate(
+            **common,
+            external_event_id=f"{DEMO_EVENT_PREFIX}-spo2-critical-candidate",
+            metric_type=MetricType.SPO2,
+            numeric_value="89",
+            metric_unit="%",
+            recorded_at=start + DEMO_EVENT_OFFSETS["spo2-critical-candidate"],
         ),
         HealthEventCreate(
             **common,

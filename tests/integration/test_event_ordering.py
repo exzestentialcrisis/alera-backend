@@ -54,7 +54,8 @@ def test_new_normal_then_older_abnormal_keeps_inactive_watermark(db_session, pat
 
 
 def test_new_critical_then_older_elevated_stays_confirmed(db_session, patient):
-    current = ingest(db_session, patient, "165", BASE_TIME)
+    ingest(db_session, patient, "165", BASE_TIME)
+    current = ingest(db_session, patient, "160", BASE_TIME + timedelta(seconds=15))
     result = tracker(db_session, patient)
     confirmed_at = result.confirmed_at
     ingest(db_session, patient, "110", BASE_TIME - timedelta(minutes=1))
@@ -64,9 +65,10 @@ def test_new_critical_then_older_elevated_stays_confirmed(db_session, patient):
 
 
 def test_equal_timestamp_cannot_reduce_severity(db_session, patient):
-    critical = ingest(db_session, patient, "165", BASE_TIME)
-    ingest(db_session, patient, "110", BASE_TIME)
-    ingest(db_session, patient, "78", BASE_TIME)
+    ingest(db_session, patient, "165", BASE_TIME)
+    critical = ingest(db_session, patient, "160", BASE_TIME + timedelta(seconds=15))
+    ingest(db_session, patient, "110", BASE_TIME + timedelta(seconds=15))
+    ingest(db_session, patient, "78", BASE_TIME + timedelta(seconds=15))
     result = tracker(db_session, patient)
     assert result.active is True
     assert result.last_event_id == critical.event_id

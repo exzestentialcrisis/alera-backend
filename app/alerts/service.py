@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import case, func, select
@@ -9,6 +10,10 @@ from app.alerts.access import accessible_patient_ids
 from app.alerts.display import display_mapping
 from app.alerts.errors import AlertNotFoundError, AlertTransitionConflictError
 from app.alerts.model import Alert, AlertStatus
+from app.condition_trackers.hr_rules import (
+    HrWarningQualification,
+    qualify_hr_warning,
+)
 from app.condition_trackers.service import ConditionTrackerUpdateResult
 from app.core.time import utc_now
 from app.event_evaluations.model import (
@@ -27,7 +32,8 @@ NORMAL_CONDITIONS = {
     ConditionKey.SPO2_NORMAL,
 }
 HR_WARNING_CONDITIONS = {ConditionKey.HR_HIGH, ConditionKey.HR_LOW}
-HR_WARNING_PERSISTENCE = timedelta(minutes=5)
+CRITICAL_CONFIRMATION_MIN_GAP = timedelta(seconds=10)
+CRITICAL_CONFIRMATION_MAX_GAP = timedelta(seconds=60)
 SPO2_WARNING_MEASUREMENT_COUNT = 2
 
 
@@ -86,13 +92,55 @@ def _find_unresolved_occurrence_alert(
     )
 
 
+def _critical_confirmation_met(
+    db: Session,
+    event: HealthEvent,
+    evaluation: EventEvaluation,
+) -> bool:
+    """Require a prior valid Critical sample without a later safe sample."""
+    window_started_at = event.recorded_at - CRITICAL_CONFIRMATION_MAX_GAP
+    rows = db.execute(
+        select(
+            HealthEvent.recorded_at,
+            EventEvaluation.condition_key,
+            EventEvaluation.severity,
+        )
+        .join(EventEvaluation, EventEvaluation.event_id == HealthEvent.event_id)
+        .where(
+            HealthEvent.patient_id == event.patient_id,
+            HealthEvent.metric_type == event.metric_type,
+            HealthEvent.validation_status == ValidationStatus.VALID_REALTIME,
+            HealthEvent.event_id != event.event_id,
+            HealthEvent.recorded_at >= window_started_at,
+            HealthEvent.recorded_at < event.recorded_at,
+        )
+        .order_by(HealthEvent.recorded_at.desc(), HealthEvent.created_at.desc())
+    ).all()
+
+    latest_noncritical_at = next(
+        (
+            recorded_at
+            for recorded_at, _, severity in rows
+            if severity != EvaluationSeverity.CRITICAL
+        ),
+        None,
+    )
+    return any(
+        condition_key == evaluation.condition_key
+        and severity == EvaluationSeverity.CRITICAL
+        and event.recorded_at - recorded_at >= CRITICAL_CONFIRMATION_MIN_GAP
+        and (latest_noncritical_at is None or recorded_at > latest_noncritical_at)
+        for recorded_at, condition_key, severity in rows
+    )
+
+
 def process_immediate_critical_alert(
     db: Session,
     event: HealthEvent,
     evaluation: EventEvaluation,
     tracker_result: ConditionTrackerUpdateResult,
 ) -> Alert | None:
-    """Create or reuse an immediate Critical alert without ending the transaction."""
+    """Create or reuse a confirmed Critical alert without ending the transaction."""
     tracker = tracker_result.tracker
     if (
         event.validation_status != ValidationStatus.VALID_REALTIME
@@ -104,6 +152,13 @@ def process_immediate_critical_alert(
         or tracker.last_event_id != event.event_id
     ):
         return None
+
+    if not _critical_confirmation_met(db, event, evaluation):
+        return None
+
+    evaluation.persistence_met = True
+    if tracker.confirmed_at is None:
+        tracker.confirmed_at = event.recorded_at
 
     alert = _find_unresolved_occurrence_alert(
         db,
@@ -161,10 +216,30 @@ def process_persistent_hr_warning(
     ):
         return None
 
-    if event.recorded_at - tracker.started_at < HR_WARNING_PERSISTENCE:
+    patient = db.get(ElderlyPatient, event.patient_id)
+    if patient is None:
+        raise ValueError("Patient not found")
+    qualification = qualify_hr_warning(
+        db,
+        patient_id=event.patient_id,
+        condition_key=evaluation.condition_key,
+        occurrence_started_at=tracker.started_at,
+        observed_at=event.recorded_at,
+        normal_min=Decimal(patient.normal_hr_min),
+        normal_max=Decimal(patient.normal_hr_max),
+    )
+    if qualification is None:
         return None
 
     evaluation.persistence_met = True
+    if qualification == HrWarningQualification.SUSTAINED:
+        evaluation.evaluation_reason += (
+            " Warning qualified after two minutes of sustained abnormality."
+        )
+    else:
+        evaluation.evaluation_reason += (
+            " Warning qualified from intermittent abnormality in five minutes."
+        )
     alert = _find_unresolved_occurrence_alert(
         db,
         event,

@@ -188,6 +188,17 @@ def device(db, user, token):
 
 
 def critical(db, payload):
+    create_health_event(
+        db,
+        HealthEventCreate(
+            **{
+                **payload,
+                "external_event_id": str(uuid4()),
+                "numeric_value": "151",
+                "recorded_at": payload["recorded_at"] - timedelta(seconds=15),
+            }
+        ),
+    )
     return create_health_event(
         db, HealthEventCreate(**{**payload, "numeric_value": "151"})
     )
@@ -313,14 +324,21 @@ def test_rollback_and_savepoint_do_not_send(
     device(db_session, caregiver(db_session, patient), "synthetic")
 
     def evaluate():
-        event = HealthEvent(
-            **HealthEventCreate(
-                **{**event_payload, "numeric_value": "151"}
-            ).model_dump()
-        )
-        db_session.add(event)
-        db_session.flush()
-        evaluate_event(db_session, event)
+        for offset in (-15, 0):
+            event = HealthEvent(
+                **HealthEventCreate(
+                    **{
+                        **event_payload,
+                        "external_event_id": str(uuid4()),
+                        "numeric_value": "151",
+                        "recorded_at": event_payload["recorded_at"]
+                        + timedelta(seconds=offset),
+                    }
+                ).model_dump()
+            )
+            db_session.add(event)
+            db_session.flush()
+            evaluate_event(db_session, event)
 
     evaluate()
     transport.assert_not_called()
@@ -344,7 +362,7 @@ def test_rollback_and_savepoint_do_not_send(
 @pytest.mark.parametrize(
     "metric,value,offsets,critical_value",
     [
-        ("HEART_RATE", "110", (0, 90, 180, 270, 300), "151"),
+        ("HEART_RATE", "110", tuple(range(0, 121, 15)), "151"),
         ("SPO2", "93", (0, 60), "85"),
     ],
 )
@@ -373,6 +391,8 @@ def test_warning_qualification_and_critical_escalation_each_send_once(
     ingest(value, offsets[-1])
     assert transport.call_count == 1
     ingest(critical_value, offsets[-1] + 30)
+    assert transport.call_count == 1
+    ingest(critical_value, offsets[-1] + 45)
     assert transport.call_count == 2
     escalation = transport.call_args.kwargs["json"]["message"]
     unit = "BPM" if metric == "HEART_RATE" else "%"
@@ -385,7 +405,7 @@ def test_warning_qualification_and_critical_escalation_each_send_once(
         ),
         "body": f"Test Patient • {critical_value}{separator}{unit}",
     }
-    ingest(critical_value, offsets[-1] + 60)
+    ingest(critical_value, offsets[-1] + 75)
     assert transport.call_count == 2
     assert len(db_session.scalars(select(Alert)).all()) == 1
 
@@ -406,14 +426,16 @@ def test_acknowledged_warning_still_sends_critical_escalation(
             }),
         )
 
-    for offset in (0, 90, 180, 270, 300):
+    for offset in range(0, 121, 15):
         ingest("110", offset)
     alert = db_session.scalar(select(Alert))
     assert transport.call_count == 1
 
     alert.status = AlertStatus.ACKNOWLEDGED
     db_session.commit()
-    ingest("151", 330)
+    ingest("151", 150)
+    assert transport.call_count == 1
+    ingest("151", 165)
 
     db_session.refresh(alert)
     assert transport.call_count == 2
@@ -442,12 +464,15 @@ def test_new_critical_occurrence_sends_again_while_prior_alert_is_unresolved(
             }),
         )
 
-    first = ingest("151", 0)
+    ingest("151", 0)
+    first = ingest("155", 15)
     first_alert_id = evaluation_for(db_session, first).alert_id
     assert transport.call_count == 1
 
-    ingest("78", 60)
-    recurring = ingest("160", 120)
+    for offset in range(30, 121, 15):
+        ingest("78", offset)
+    ingest("160", 135)
+    recurring = ingest("165", 150)
     recurring_alert_id = evaluation_for(db_session, recurring).alert_id
 
     assert transport.call_count == 2
@@ -455,7 +480,7 @@ def test_new_critical_occurrence_sends_again_while_prior_alert_is_unresolved(
     assert len(db_session.scalars(select(Alert)).all()) == 2
     assert transport.call_args.kwargs["json"]["message"]["notification"] == {
         "title": "Critical: High Heart Rate",
-        "body": "Test Patient • 160 BPM",
+        "body": "Test Patient • 165 BPM",
     }
 
 
@@ -512,12 +537,21 @@ def test_only_active_alerts_are_queued(db_session, patient, event_payload, trans
     from app.health_events.model import HealthEvent
 
     device(db_session, caregiver(db_session, patient), "synthetic")
-    event = HealthEvent(**HealthEventCreate(
-        **{**event_payload, "numeric_value": "151"}
-    ).model_dump())
-    db_session.add(event)
-    db_session.flush()
-    evaluate_event(db_session, event)
+    for offset in (-15, 0):
+        event = HealthEvent(
+            **HealthEventCreate(
+                **{
+                    **event_payload,
+                    "external_event_id": str(uuid4()),
+                    "numeric_value": "151",
+                    "recorded_at": event_payload["recorded_at"]
+                    + timedelta(seconds=offset),
+                }
+            ).model_dump()
+        )
+        db_session.add(event)
+        db_session.flush()
+        evaluate_event(db_session, event)
     alert = db_session.scalar(select(Alert))
     alert.status = AlertStatus.ACKNOWLEDGED
     db_session.commit()

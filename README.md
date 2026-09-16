@@ -67,25 +67,29 @@ and suppression behavior is deferred to later Phase 5 work.
 
 ## Phase 5 alert behavior
 
-A `VALID_REALTIME` heart-rate reading above 150 bpm or SpO₂ reading below
-90% produces a Critical evaluation and an ACTIVE Critical alert in the same
-transaction. For example, submitting a heart-rate value of `151` through the
-health-event ingestion pipeline should create an `HR_HIGH` alert and link the
-event evaluation to it.
+A `VALID_REALTIME` heart-rate reading above 150 bpm, below 40 bpm, or an SpO₂
+reading below 90% produces a Critical candidate. Two Critical samples 10–60
+seconds apart, without an intervening non-Critical sample for that metric,
+confirm an ACTIVE Critical alert. This filters isolated sensor noise while
+keeping confirmation fast.
 
-Heart-rate Warning alerts require five elapsed minutes of continuously abnormal
-accepted real-time readings. Gaps up to and including 90 seconds preserve the
-occurrence, including a planned approximately 30-second sensor interruption;
-larger gaps restart its timer. Persistence uses event timestamps, and duration
-alone never escalates a Warning to Critical.
+Heart-rate warning decisions use median values in fixed 15-second buckets.
+An alert qualifies when at least seven of nine buckets are outside the patient's
+normal range across two elapsed minutes. Intermittent instability also qualifies
+when at least six abnormal buckets span at least two minutes in a rolling
+five-minute window. A normal sample therefore does not erase the entire history.
+Confirmed recovery requires seven normal buckets spanning 90 seconds.
 
-For SpO₂, values below 90% create an immediate Critical alert, values from 90%
-through 93% are Warning candidates, and values of 94% or above are normal. Two
-consecutive accepted Warning candidates qualify a Warning alert. Gaps up to and
-including five minutes preserve the consecutive occurrence; larger gaps restart
-the count. Duration alone never escalates an SpO₂ Warning to Critical.
+For SpO₂, values from 90% through 93% are Warning candidates and values of 94%
+or above are normal. Two consecutive accepted Warning candidates qualify a
+Warning alert. Gaps up to and including five minutes preserve that occurrence;
+larger gaps restart the count. Duration alone never escalates an SpO₂ Warning
+to Critical.
 
-Raw sensor callbacks are not expected to be stored individually.
+Raw heart-rate callbacks may arrive every second while the watch screen is on.
+The backend retains them and derives the 15-second median decision buckets from
+their original `recorded_at` timestamps. Invalid readings remain auditable but
+do not participate in alert qualification.
 
 ## Caregiver Alert API MVP
 

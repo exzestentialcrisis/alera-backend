@@ -274,6 +274,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
         )
 
         expected_indexes = {
+            "health_events": {"ix_health_events_patient_metric_recorded"},
             "alerts": {
                 "ix_alerts_patient_status",
                 "ix_alerts_patient_condition_detected",

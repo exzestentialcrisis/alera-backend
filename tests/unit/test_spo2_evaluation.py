@@ -12,7 +12,12 @@ from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 
 def evaluate(monkeypatch, value, minimum=95):
     db = Mock()
-    db.get.return_value = SimpleNamespace(usual_spo2_min=minimum)
+    db.get.return_value = SimpleNamespace(
+        normal_hr_min=60,
+        normal_hr_max=100,
+        usual_spo2_min=minimum,
+        usual_spo2_max=None,
+    )
     monkeypatch.setattr(evaluation_service, "update_condition_tracker", Mock())
     monkeypatch.setattr(
         evaluation_service,

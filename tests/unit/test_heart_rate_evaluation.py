@@ -43,6 +43,8 @@ def evaluate(monkeypatch, value, hr_min=60, hr_max=100):
         ("78", MonitoringState.STABLE, ConditionKey.HR_NORMAL),
         ("110", MonitoringState.ELEVATED, ConditionKey.HR_HIGH),
         ("45", MonitoringState.ELEVATED, ConditionKey.HR_LOW),
+        ("39", MonitoringState.CRITICAL, ConditionKey.HR_LOW),
+        ("40", MonitoringState.ELEVATED, ConditionKey.HR_LOW),
         ("165", MonitoringState.CRITICAL, ConditionKey.HR_HIGH),
         ("60", MonitoringState.STABLE, ConditionKey.HR_NORMAL),
         ("59", MonitoringState.ELEVATED, ConditionKey.HR_LOW),
@@ -67,3 +69,9 @@ def test_global_critical_rule_precedes_patient_maximum(monkeypatch):
     result = evaluate(monkeypatch, "151", hr_min=60, hr_max=180)
     assert result.new_state == MonitoringState.CRITICAL
     assert result.condition_key == ConditionKey.HR_HIGH
+
+
+def test_global_low_critical_rule_precedes_patient_minimum(monkeypatch):
+    result = evaluate(monkeypatch, "39", hr_min=30, hr_max=100)
+    assert result.new_state == MonitoringState.CRITICAL
+    assert result.condition_key == ConditionKey.HR_LOW

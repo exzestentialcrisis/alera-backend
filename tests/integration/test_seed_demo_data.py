@@ -73,13 +73,13 @@ def test_seed_demo_data_is_idempotent_and_generates_display_ready_alerts(db_sess
     assert db_session.scalar(select(func.count(User.user_id))) == 2
     assert db_session.scalar(select(func.count(Household.household_id))) == 1
     assert db_session.scalar(select(func.count(ElderlyPatient.patient_id))) == 1
-    assert db_session.scalar(select(func.count(HealthEvent.event_id))) == 4
+    assert db_session.scalar(select(func.count(HealthEvent.event_id))) == 6
     assert db_session.scalar(select(func.count(Alert.alert_id))) == 2
     assert db_session.scalar(
         select(func.count(HealthEvent.event_id)).where(
             HealthEvent.external_event_id.like(f"{DEMO_EVENT_PREFIX}-%")
         )
-    ) == 4
+    ) == 6
 
     rows, total = list_alerts(
         db_session,
