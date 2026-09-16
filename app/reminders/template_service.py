@@ -1,20 +1,31 @@
 from uuid import UUID
 
-from sqlalchemy import func, select
+from datetime import timedelta
+
+from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
 from app.core.time import utc_now
 from app.household_access.model import CaregiverPatientAssignment
 from app.households.model import Household, HouseholdStatus
 from app.patients.model import ElderlyPatient
-from app.reminders.enums import ReminderTemplateStatus
+from app.reminders.enums import (
+    ReminderActionType,
+    ReminderOccurrenceStatus,
+    ReminderTemplateStatus,
+)
 from app.reminders.errors import (
     ReminderAccessForbiddenError,
     ReminderActionConflictError,
     ReminderNotFoundError,
     ReminderQueryValidationError,
 )
-from app.reminders.model import ReminderTemplate
+from app.reminders.model import ReminderAction, ReminderOccurrence, ReminderTemplate
+from app.reminders.scheduling import (
+    MATERIALIZATION_WINDOW_DAYS,
+    materialize_reminder_occurrences,
+    occurrence_times_for_window,
+)
 from app.reminders.template_schema import (
     ReminderTemplateCreate,
     ReminderTemplateUpdate,
@@ -102,7 +113,7 @@ def create_reminder_template(
         start_date=payload.start_date,
         start_time=payload.start_time,
         timezone=payload.timezone,
-        schedule_rule=None,
+        schedule_rule=payload.schedule_rule,
         due_after_minutes=payload.due_after_minutes,
         snooze_allowed=payload.snooze_allowed,
         default_snooze_minutes=payload.default_snooze_minutes,
@@ -112,7 +123,125 @@ def create_reminder_template(
     )
     db.add(template)
     db.flush()
+    materialize_reminder_occurrences(
+        db, template=template, window_start=utc_now()
+    )
     return template
+
+
+_SCHEDULE_FIELDS = {
+    "start_date",
+    "start_time",
+    "timezone",
+    "schedule_rule",
+    "due_after_minutes",
+}
+
+
+def _cancel_future_occurrences(
+    db: Session,
+    *,
+    template: ReminderTemplate,
+    actor: User,
+    now,
+    reason: str,
+) -> int:
+    """Cancel unacted-on future occurrences and retain an audit trail."""
+    occurrences = list(
+        db.scalars(
+            select(ReminderOccurrence)
+            .where(
+                ReminderOccurrence.reminder_template_id
+                == template.reminder_template_id,
+                ReminderOccurrence.status == ReminderOccurrenceStatus.UPCOMING,
+                ReminderOccurrence.scheduled_at >= now,
+            )
+            .with_for_update()
+        )
+    )
+    for occurrence in occurrences:
+        occurrence.status = ReminderOccurrenceStatus.CANCELED
+        occurrence.updated_at = now
+        db.add(
+            ReminderAction(
+                reminder_occurrence_id=occurrence.reminder_occurrence_id,
+                performed_by_user_id=actor.user_id,
+                action_type=ReminderActionType.CANCEL,
+                action_note=reason,
+                previous_status=ReminderOccurrenceStatus.UPCOMING,
+                new_status=ReminderOccurrenceStatus.CANCELED,
+                action_metadata={"source": "template_reconciliation"},
+                performed_at=now,
+            )
+        )
+    db.flush()
+    return len(occurrences)
+
+
+def _restore_template_canceled_occurrences(
+    db: Session,
+    *,
+    template: ReminderTemplate,
+    actor: User,
+    now,
+) -> int:
+    """Reactivate matching rows canceled by a prior template reconciliation.
+
+    The database uniqueness rule prevents inserting a second row for the same
+    template/time after a caregiver disables then re-enables a template.  We
+    only restore rows with our reconciliation marker, never a caregiver's
+    explicit per-occurrence cancellation.
+    """
+    scheduled_values = occurrence_times_for_window(
+        template,
+        window_start=now,
+        window_end=now + timedelta(days=MATERIALIZATION_WINDOW_DAYS),
+    )
+    if not scheduled_values:
+        return 0
+    reconciliation_action = exists(
+        select(ReminderAction.reminder_action_id).where(
+            ReminderAction.reminder_occurrence_id
+            == ReminderOccurrence.reminder_occurrence_id,
+            ReminderAction.action_type == ReminderActionType.CANCEL,
+            ReminderAction.action_metadata["source"].astext
+            == "template_reconciliation",
+        )
+    )
+    occurrences = list(
+        db.scalars(
+            select(ReminderOccurrence)
+            .where(
+                ReminderOccurrence.reminder_template_id
+                == template.reminder_template_id,
+                ReminderOccurrence.status == ReminderOccurrenceStatus.CANCELED,
+                ReminderOccurrence.scheduled_at.in_(scheduled_values),
+                reconciliation_action,
+            )
+            .with_for_update()
+        )
+    )
+    for occurrence in occurrences:
+        occurrence.status = ReminderOccurrenceStatus.UPCOMING
+        occurrence.due_at = occurrence.scheduled_at + timedelta(
+            minutes=template.due_after_minutes
+        )
+        occurrence.updated_at = now
+        db.add(
+            ReminderAction(
+                reminder_occurrence_id=occurrence.reminder_occurrence_id,
+                performed_by_user_id=actor.user_id,
+                action_type=ReminderActionType.RESCHEDULE,
+                action_note="Reactivated because the reminder template is active.",
+                previous_status=ReminderOccurrenceStatus.CANCELED,
+                new_status=ReminderOccurrenceStatus.UPCOMING,
+                new_due_at=occurrence.due_at,
+                action_metadata={"source": "template_reconciliation"},
+                performed_at=now,
+            )
+        )
+    db.flush()
+    return len(occurrences)
 
 
 def list_reminder_templates(
@@ -205,11 +334,33 @@ def update_reminder_template(
         raise ReminderQueryValidationError(
             "Required reminder template fields cannot be null."
         )
+    schedule_changed = bool(_SCHEDULE_FIELDS & changes.keys())
+    status_changed = "status" in changes and changes["status"] != template.status
     for field, value in changes.items():
         setattr(template, field, value)
     _validate_effective_snooze(template)
-    template.updated_at = utc_now()
+    now = utc_now()
+    template.updated_at = now
     db.flush()
+    if schedule_changed or status_changed:
+        _cancel_future_occurrences(
+            db,
+            template=template,
+            actor=actor,
+            now=now,
+            reason=(
+                "Canceled because the reminder template schedule changed."
+                if schedule_changed
+                else "Canceled because the reminder template was disabled."
+            ),
+        )
+    if template.status is ReminderTemplateStatus.ACTIVE and (
+        schedule_changed or status_changed
+    ):
+        _restore_template_canceled_occurrences(
+            db, template=template, actor=actor, now=now
+        )
+        materialize_reminder_occurrences(db, template=template, window_start=now)
     return template
 
 
@@ -226,4 +377,11 @@ def archive_reminder_template(
     template.archived_at = archived_at
     template.updated_at = archived_at
     db.flush()
+    _cancel_future_occurrences(
+        db,
+        template=template,
+        actor=actor,
+        now=archived_at,
+        reason="Canceled because the reminder template was archived.",
+    )
     return template
