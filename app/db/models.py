@@ -10,4 +10,8 @@ from app.household_access.model import CaregiverPatientAssignment, PatientAccess
 
 from app.devices.model import CaregiverPushDevice, PatientPushDevice
 from app.nudges.model import PatientNudge
+from app.monitoring_devices.model import MonitoringDevice
 from app.reminders.model import ReminderAction, ReminderOccurrence, ReminderTemplate
+
+from app.activity.model import ActivityData, ActivityDailyData, ActivitySession
+

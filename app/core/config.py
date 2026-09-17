@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     device_heartbeat_stale_seconds: int = 150
     device_liveness_check_seconds: int = 30
 
+    inactivity_timezone: str = "Asia/Manila"
+    inactivity_threshold_hours: int = 8
+    inactivity_day_start_hour: int = 6
+    inactivity_day_end_hour: int = 22
+    activity_step_stale_seconds: int = 900
+
     alera_jwt_secret: str | None = None
     alera_jwt_access_token_minutes: int = 60
 
