@@ -181,8 +181,34 @@ def process_immediate_critical_alert(
         db.add(alert)
         db.flush()
     elif alert.severity != EvaluationSeverity.CRITICAL:
+        previous_severity = alert.severity
         alert.severity = EvaluationSeverity.CRITICAL
         alert.updated_at = utc_now()
+        db.add(
+            AlertAction(
+                alert_id=alert.alert_id,
+                performed_by_user_id=None,
+                action_type=AlertActionType.ESCALATE,
+                action_note="Alert severity escalated automatically.",
+                previous_status=alert.status,
+                new_status=alert.status,
+                action_metadata={
+                    "previous_severity": previous_severity.value,
+                    "new_severity": EvaluationSeverity.CRITICAL.value,
+                    "reading_value": str(event.numeric_value),
+                    "reading_unit": event.metric_unit,
+                    "occurrence_started_at": alert.detected_at.isoformat(),
+                    "alert_confirmed_at": alert.confirmed_at.isoformat(),
+                    "seconds_since_detected": int(
+                        (event.recorded_at - alert.detected_at).total_seconds()
+                    ),
+                    "seconds_since_confirmed": int(
+                        (event.recorded_at - alert.confirmed_at).total_seconds()
+                    ),
+                },
+                performed_at=event.recorded_at,
+            )
+        )
         notification_required = True
         is_escalation = True
 

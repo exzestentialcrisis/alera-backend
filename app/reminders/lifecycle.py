@@ -4,8 +4,13 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import literal_column, or_, select
 from sqlalchemy.orm import Session
 
-from app.reminders.enums import ReminderActionType, ReminderOccurrenceStatus
+from app.reminders.enums import (
+    ReminderActionType,
+    ReminderNotificationChannel,
+    ReminderOccurrenceStatus,
+)
 from app.reminders.model import ReminderAction, ReminderOccurrence, ReminderTemplate
+from app.reminders.notification_events import queue_missed_reminder_notification
 
 
 DEFAULT_LIFECYCLE_BATCH_SIZE = 100
@@ -140,6 +145,11 @@ def process_reminder_lifecycle(
                 performed_at=now,
             )
         )
+        if template.notification_channels is ReminderNotificationChannel.PUSH:
+            queue_missed_reminder_notification(
+                db,
+                occurrence.reminder_occurrence_id,
+            )
 
     db.flush()
     return ReminderLifecycleResult(
