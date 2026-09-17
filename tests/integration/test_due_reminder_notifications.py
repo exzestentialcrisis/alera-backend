@@ -175,6 +175,7 @@ def test_invalid_patient_registration_is_removed(
     )
     db_session.add(device)
     add_due_candidate(db_session, patient, channel=ReminderNotificationChannel.PUSH)
+    device_id = device.id
     reminder_transport.return_value = httpx.Response(
         404,
         json={
@@ -192,4 +193,4 @@ def test_invalid_patient_registration_is_removed(
     process_reminder_lifecycle(db_session, at=NOW)
     db_session.commit()
     db_session.expire_all()
-    assert db_session.get(PatientPushDevice, device.id) is None
+    assert db_session.get(PatientPushDevice, device_id) is None
