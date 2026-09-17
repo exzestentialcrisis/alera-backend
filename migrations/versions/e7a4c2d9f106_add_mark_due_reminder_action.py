@@ -10,7 +10,7 @@ from alembic import op
 
 
 revision: str = "e7a4c2d9f106"
-down_revision: str | None = "d5f8a2c4e6b1"
+down_revision: str | None = "cd660c231d72"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
