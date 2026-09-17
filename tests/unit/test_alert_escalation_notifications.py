@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 import app.alerts.service as alert_service
+from app.alert_actions.model import AlertAction, AlertActionType
 from app.alerts.model import Alert, AlertStatus
 from app.condition_trackers.service import ConditionTrackerUpdateResult
 from app.event_evaluations.model import (
@@ -84,6 +85,19 @@ def test_warning_to_critical_queues_one_escalation(monkeypatch, status):
     assert alert.severity is EvaluationSeverity.CRITICAL
     assert alert.status is status
     assert evaluation.alert_id == alert.alert_id
+    escalation = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], AlertAction)
+    )
+    assert escalation.action_type is AlertActionType.ESCALATE
+    assert escalation.performed_by_user_id is None
+    assert escalation.previous_status is status
+    assert escalation.new_status is status
+    assert escalation.action_metadata["previous_severity"] == "WARNING"
+    assert escalation.action_metadata["new_severity"] == "CRITICAL"
+    assert escalation.action_metadata["seconds_since_detected"] == 0
+    assert escalation.action_metadata["seconds_since_confirmed"] == 0
     queued.assert_called_once_with(
         db,
         alert,
@@ -115,6 +129,7 @@ def test_later_critical_reading_does_not_repeat_notification(monkeypatch):
 
     assert result is alert
     assert evaluation.alert_id == alert.alert_id
+    db.add.assert_not_called()
     queued.assert_not_called()
 
 
