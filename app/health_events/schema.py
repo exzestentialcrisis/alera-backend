@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from enum import Enum
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import ClassVar
 from uuid import UUID
@@ -6,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.health_events.model import MetricType, ValidationStatus
+from app.event_evaluations.model import ConditionKey, EvaluationSeverity
 
 
 class HealthEventCreate(BaseModel):
@@ -58,7 +60,9 @@ class HealthEventCreate(BaseModel):
                     rounding=ROUND_HALF_UP,
                 )
             except InvalidOperation as exc:
-                raise ValueError("numeric_value is outside the supported range.") from exc
+                raise ValueError(
+                    "numeric_value is outside the supported range."
+                ) from exc
             if abs(self.numeric_value) > self.NUMERIC_MAX:
                 raise ValueError("numeric_value must fit NUMERIC(10,2).")
 
@@ -90,3 +94,59 @@ class HealthEventResponse(HealthEventCreate):
     model_config = {
         "from_attributes": True,
     }
+
+
+class VitalTrendRange(str, Enum):
+    DAY = "24h"
+    WEEK = "7d"
+    MONTH = "30d"
+
+
+class VitalTrendPoint(BaseModel):
+    recorded_at: datetime
+
+    # Average reading inside this graph bucket.
+    value: float
+
+    # Preserve the range so abnormal spikes are not hidden by averaging.
+    minimum: float
+    maximum: float
+
+    reading_count: int
+
+    # Highest severity observed anywhere inside this bucket.
+    severity: EvaluationSeverity | None = None
+
+
+class VitalTrendResolution(str, Enum):
+    HOUR = "1h"
+    DAY = "1d"
+
+
+class VitalTrendSummary(BaseModel):
+    latest: float | None = None
+    average: float | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    reading_count: int = 0
+
+
+class VitalTrendThresholds(BaseModel):
+    normal_min: float | None = None
+    normal_max: float | None = None
+
+
+class VitalTrendResponse(BaseModel):
+    patient_id: UUID
+    metric_type: MetricType
+    unit: str
+    range: VitalTrendRange
+    resolution: VitalTrendResolution
+
+    from_at: datetime
+    to_at: datetime
+
+    summary: VitalTrendSummary
+    thresholds: VitalTrendThresholds
+
+    points: list[VitalTrendPoint]

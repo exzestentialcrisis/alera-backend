@@ -31,6 +31,9 @@ from app.patients.service import (
     MonitoringSettingsValidationError,
 )
 from app.users.model import User
+from app.health_events.model import MetricType
+from app.health_events.schema import VitalTrendRange, VitalTrendResponse
+from app.health_events.service import get_vital_trend
 
 router = APIRouter(prefix="/api/v1/patients", tags=["Patients"])
 
@@ -64,6 +67,56 @@ def read_patients(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get(
+    "/{patient_id}/vital-trends",
+    response_model=VitalTrendResponse,
+    summary="Get patient vital-sign trends",
+    responses={
+        404: {
+            "description": "Patient not found in the actor's scope.",
+        },
+        422: {
+            "description": "Unsupported metric for vital trends.",
+        },
+    },
+)
+def read_vital_trends(
+    patient_id: UUID,
+    metric_type: MetricType,
+    trend_range: Annotated[
+        VitalTrendRange,
+        Query(alias="range"),
+    ] = VitalTrendRange.DAY,
+    actor: User = Depends(get_current_caregiver),
+    db: Session = Depends(get_db),
+):
+    try:
+        patient_row = get_patient(
+            db,
+            actor,
+            patient_id,
+        )
+
+        return get_vital_trend(
+            db,
+            patient_row.patient,
+            metric_type=metric_type,
+            trend_range=trend_range,
+        )
+
+    except PatientNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get(
