@@ -4,7 +4,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.devices.model import CaregiverPushDevice
+from app.devices.model import CaregiverPushDevice, PatientPushDevice
 from app.household_access.model import CaregiverPatientAssignment
 from app.notifications.fcm import FCMSender
 from app.patients.model import ElderlyPatient
@@ -17,6 +17,68 @@ from app.users.model import AccountStatus, User, UserRole
 
 
 logger = logging.getLogger(__name__)
+
+
+def deliver_due_reminder_notifications(bind, occurrence_ids) -> None:
+    """Best-effort patient delivery after the due transition commits."""
+    try:
+        sender = FCMSender(get_settings())
+        if not sender.configured:
+            return
+        with Session(bind=bind) as db:
+            rows = db.execute(
+                select(ReminderOccurrence, ReminderTemplate)
+                .join(
+                    ReminderTemplate,
+                    ReminderTemplate.reminder_template_id
+                    == ReminderOccurrence.reminder_template_id,
+                )
+                .where(
+                    ReminderOccurrence.reminder_occurrence_id.in_(occurrence_ids),
+                    ReminderOccurrence.status == ReminderOccurrenceStatus.DUE,
+                    ReminderTemplate.notification_channels
+                    == ReminderNotificationChannel.PUSH,
+                )
+            ).all()
+            for occurrence, template in rows:
+                patient = db.get(ElderlyPatient, template.patient_id)
+                patient_user = db.get(User, patient.user_id) if patient else None
+                if (
+                    patient is None
+                    or patient.archived_at is not None
+                    or patient_user is None
+                    or patient_user.role is not UserRole.ELDERLY_PATIENT
+                    or patient_user.account_status is not AccountStatus.ACTIVE
+                ):
+                    continue
+                devices = db.scalars(
+                    select(PatientPushDevice).where(
+                        PatientPushDevice.user_id == patient_user.user_id
+                    )
+                ).all()
+                for device in devices:
+                    try:
+                        invalid = sender.send_patient_reminder(
+                            device.fcm_token,
+                            occurrence_id=occurrence.reminder_occurrence_id,
+                            template_id=template.reminder_template_id,
+                            patient_id=template.patient_id,
+                            title=template.title,
+                            instructions=template.instructions,
+                        )
+                        if invalid:
+                            db.execute(
+                                delete(PatientPushDevice).where(
+                                    PatientPushDevice.id == device.id,
+                                    PatientPushDevice.user_id == device.user_id,
+                                    PatientPushDevice.updated_at == device.updated_at,
+                                )
+                            )
+                    except Exception:
+                        logger.warning("Patient reminder FCM delivery failed.")
+            db.commit()
+    except Exception:
+        logger.warning("Due reminder notification delivery unavailable.")
 
 
 def deliver_missed_reminder_notifications(bind, occurrence_ids) -> None:

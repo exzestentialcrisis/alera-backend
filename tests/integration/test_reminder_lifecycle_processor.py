@@ -120,15 +120,16 @@ def test_processor_advances_states_audits_missed_and_is_idempotent(
     assert db_session.get(ReminderOccurrence, completed.reminder_occurrence_id).status is ReminderOccurrenceStatus.COMPLETED
 
     actions = list(db_session.scalars(select(ReminderAction)))
-    assert len(actions) == 3
-    assert all(action.action_type is ReminderActionType.MARK_MISSED for action in actions)
+    assert len(actions) == 4
+    assert [action.action_type for action in actions].count(ReminderActionType.MARK_DUE) == 1
+    assert [action.action_type for action in actions].count(ReminderActionType.MARK_MISSED) == 3
     assert all(action.performed_by_user_id is None for action in actions)
     assert all(action.action_metadata == {"source": "reminder_lifecycle", "automated": True} for action in actions)
 
     replay = process_reminder_lifecycle(db_session, at=NOW)
     db_session.commit()
     assert replay.processed == 0
-    assert db_session.scalar(select(func.count()).select_from(ReminderAction)) == 3
+    assert db_session.scalar(select(func.count()).select_from(ReminderAction)) == 4
 
 
 def test_processor_skips_rows_locked_by_another_worker(
