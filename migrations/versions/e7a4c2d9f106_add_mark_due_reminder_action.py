@@ -1,7 +1,7 @@
 """Add the automatic due-reminder audit action.
 
 Revision ID: e7a4c2d9f106
-Revises: d5f8a2c4e6b1
+Revises: d5f8a2c4e6b1, cd660c231d72
 """
 
 from collections.abc import Sequence
@@ -10,7 +10,7 @@ from alembic import op
 
 
 revision: str = "e7a4c2d9f106"
-down_revision: str | None = "cd660c231d72"
+down_revision: tuple[str, str] = ("d5f8a2c4e6b1", "cd660c231d72")
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
