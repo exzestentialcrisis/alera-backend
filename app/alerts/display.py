@@ -44,6 +44,11 @@ ALERT_DISPLAY_MAPPINGS: dict[ConditionKey, AlertDisplayMapping] = {
     MetricType.BATTERY_LEVEL,
     "%",
     ),
+    ConditionKey.INACTIVITY: AlertDisplayMapping(
+    "No Movement Detected",
+    MetricType.INACTIVITY,
+    "hr",
+    ),
 }
 
 # Future condition support belongs here. In particular, activity conditions can

@@ -9,4 +9,11 @@ from app.alert_actions.model import AlertAction
 from app.household_access.model import CaregiverPatientAssignment, PatientAccessCode
 
 from app.devices.model import CaregiverPushDevice
+from app.monitoring_devices.model import MonitoringDevice
 from app.reminders.model import ReminderAction, ReminderOccurrence, ReminderTemplate
+
+from app.activity.model import (
+    ActivityData,
+    ActivityDailyData,
+    ActivitySession,
+)
