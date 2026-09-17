@@ -37,7 +37,7 @@ def check_device_liveness(
         if device.device_type is MonitoringDeviceType.WATCH
     }
 
-    # 1. Phones are authoritative for their own backend reachability.
+    # 1. Phones are authoritative for their own backend reachability
     for phone in phones_by_patient.values():
         if phone.last_seen_at > cutoff:
             continue
@@ -49,40 +49,44 @@ def check_device_liveness(
             phone.connection_status = (
                 DeviceConnectionStatus.DISCONNECTED
             )
+            phone.status_changed_at = now
+            phone.updated_at = now
 
-            set_device_alert_condition(
-                db,
-                patient_id=phone.patient_id,
-                condition_key=ConditionKey.PHONE_DISCONNECTED,
-                active=True,
-            )     
+        set_device_alert_condition(
+            db,
+            patient_id=phone.patient_id,
+            condition_key=ConditionKey.PHONE_DISCONNECTED,
+            active=True,
+        )
 
         # If the phone is offline, the backend cannot know
-        # whether the watch itself is actually disconnected.
+        # whether the watch itself is actually disconnected
         watch = watches_by_patient.get(
             phone.patient_id
         )
 
-        if (
-            watch is not None
-            and watch.connection_status
-            is not DeviceConnectionStatus.UNKNOWN
-        ):
-            watch.connection_status = (
-                DeviceConnectionStatus.UNKNOWN
-            )
-            watch.status_changed_at = now
-            watch.updated_at = now
+        if watch is not None:
+            if (
+                watch.connection_status
+                is not DeviceConnectionStatus.UNKNOWN
+            ):
+                watch.connection_status = (
+                    DeviceConnectionStatus.UNKNOWN
+                )
+                watch.status_changed_at = now
+                watch.updated_at = now
 
+            # UNKNOWN is not the same as disconnected
+            # Any existing watch-disconnect alert must be resolved
             set_device_alert_condition(
                 db,
                 patient_id=watch.patient_id,
                 condition_key=ConditionKey.WATCH_DISCONNECTED,
-                active=True,
-                )
+                active=False,
+            )
 
     # 2. A stale watch is only considered disconnected
-    # when its patient phone is still healthy.
+    # when itsss patient phone is still healthy
     for watch in watches_by_patient.values():
         if watch.last_seen_at > cutoff:
             continue
@@ -109,18 +113,30 @@ def check_device_liveness(
                 watch.status_changed_at = now
                 watch.updated_at = now
 
+            set_device_alert_condition(
+                db,
+                patient_id=watch.patient_id,
+                condition_key=ConditionKey.WATCH_DISCONNECTED,
+                active=False,
+            )
+
             continue
 
         if (
             watch.connection_status
-            is DeviceConnectionStatus.DISCONNECTED
+            is not DeviceConnectionStatus.DISCONNECTED
         ):
-            continue
+            watch.connection_status = (
+                DeviceConnectionStatus.DISCONNECTED
+            )
+            watch.status_changed_at = now
+            watch.updated_at = now
 
-        watch.connection_status = (
-            DeviceConnectionStatus.DISCONNECTED
+        set_device_alert_condition(
+            db,
+            patient_id=watch.patient_id,
+            condition_key=ConditionKey.WATCH_DISCONNECTED,
+            active=True,
         )
-        watch.status_changed_at = now
-        watch.updated_at = now
 
     db.commit()
