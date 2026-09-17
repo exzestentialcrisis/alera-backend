@@ -9,11 +9,11 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import get_current_caregiver
+from app.auth.dependencies import get_current_actor
 from app.core.time import utc_now
 from app.db.database import get_db
-from app.devices.model import CaregiverPushDevice
-from app.users.model import User
+from app.devices.model import CaregiverPushDevice, PatientPushDevice
+from app.users.model import User, UserRole
 
 
 class SafeValidationRoute(APIRoute):
@@ -63,11 +63,21 @@ def _persist(db, statement):
 @router.post("/fcm-token")
 def register_token(
     payload: TokenRegistration,
-    actor: User = Depends(get_current_caregiver),
+    actor: User = Depends(get_current_actor),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     now = utc_now()
-    statement = insert(CaregiverPushDevice).values(
+    model = (
+        PatientPushDevice
+        if actor.role is UserRole.ELDERLY_PATIENT
+        else CaregiverPushDevice
+    )
+    other_model = (
+        CaregiverPushDevice
+        if model is PatientPushDevice
+        else PatientPushDevice
+    )
+    statement = insert(model).values(
         user_id=actor.user_id,
         fcm_token=payload.token,
         platform=payload.platform,
@@ -76,7 +86,7 @@ def register_token(
         last_seen_at=now,
     )
     statement = statement.on_conflict_do_update(
-        index_elements=[CaregiverPushDevice.fcm_token],
+        index_elements=[model.fcm_token],
         set_={
             "user_id": actor.user_id,
             "platform": payload.platform,
@@ -84,19 +94,33 @@ def register_token(
             "last_seen_at": now,
         },
     )
-    return _persist(db, statement)
+    try:
+        # A physical device must belong to exactly one actor category even
+        # though patient and caregiver registrations use separate tables.
+        db.execute(delete(other_model).where(other_model.fcm_token == payload.token))
+        db.execute(statement)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(503, "Device registration unavailable.") from None
+    return {"status": "ok"}
 
 
 @router.delete("/fcm-token")
 def remove_token(
     payload: TokenDelete,
-    actor: User = Depends(get_current_caregiver),
+    actor: User = Depends(get_current_actor),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
+    model = (
+        PatientPushDevice
+        if actor.role is UserRole.ELDERLY_PATIENT
+        else CaregiverPushDevice
+    )
     return _persist(
         db,
-        delete(CaregiverPushDevice).where(
-            CaregiverPushDevice.user_id == actor.user_id,
-            CaregiverPushDevice.fcm_token == payload.token,
+        delete(model).where(
+            model.user_id == actor.user_id,
+            model.fcm_token == payload.token,
         ),
     )

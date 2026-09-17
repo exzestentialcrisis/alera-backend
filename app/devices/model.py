@@ -32,3 +32,24 @@ class CaregiverPushDevice(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )
+
+
+class PatientPushDevice(Base):
+    __tablename__ = "patient_push_devices"
+    __table_args__ = (
+        CheckConstraint("platform = 'ANDROID'", name="ck_patient_push_devices_platform"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), index=True
+    )
+    fcm_token: Mapped[str] = mapped_column(String(2048), unique=True)
+    platform: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
