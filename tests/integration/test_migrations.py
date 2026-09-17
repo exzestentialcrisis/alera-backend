@@ -134,6 +134,8 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "caregiver_patient_assignments",
             "patient_access_codes",
             "caregiver_push_devices",
+            "patient_push_devices",
+            "patient_nudges",
             "reminder_templates",
             "reminder_occurrences",
             "reminder_actions",
@@ -274,6 +276,23 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             item["column_names"] == ["fcm_token"]
             for item in inspector.get_unique_constraints("caregiver_push_devices")
         )
+        assert foreign_key_exists(
+            "patient_push_devices", ["user_id"], "users", ["user_id"]
+        )
+        assert foreign_key_exists(
+            "patient_nudges", ["patient_id"], "elderly_patients", ["patient_id"]
+        )
+        assert foreign_key_exists(
+            "patient_nudges", ["sent_by_user_id"], "users", ["user_id"]
+        )
+        assert any(
+            item["column_names"] == ["fcm_token"]
+            for item in inspector.get_unique_constraints("patient_push_devices")
+        )
+        assert any(
+            item["column_names"] == ["client_action_id"]
+            for item in inspector.get_unique_constraints("patient_nudges")
+        )
 
         expected_indexes = {
             "health_events": {"ix_health_events_patient_metric_recorded"},
@@ -301,6 +320,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                 "idx_reminder_actions_performed_by",
                 "uq_reminder_actions_client_action_id",
             },
+            "patient_nudges": {"ix_patient_nudges_patient_created"},
         }
         for table_name, names in expected_indexes.items():
             assert names.issubset(
@@ -413,6 +433,14 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
                     "reminder_action_type_enum", "reminder_notification_channel_enum",
                 )
             }
+            patient_nudge_values = connection.execute(
+                text(
+                    "SELECT enumlabel FROM pg_enum "
+                    "JOIN pg_type ON pg_type.oid = pg_enum.enumtypid "
+                    "WHERE pg_type.typname = 'patient_nudge_type' "
+                    "ORDER BY pg_enum.enumsortorder"
+                )
+            ).scalars().all()
             partial_index = connection.execute(
                 text(
                     "SELECT indexdef FROM pg_indexes "
@@ -452,6 +480,11 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "reminder_action_type_enum": ["MARK_COMPLETED", "SNOOZE", "REQUEST_HELP", "CAREGIVER_OVERRIDE", "MARK_MISSED", "MARK_MISSED_HANDLED", "RESCHEDULE", "CANCEL", "ADD_NOTE", "FOLLOW_UP"],
             "reminder_notification_channel_enum": ["IN_APP", "PUSH", "SMS"],
         }
+        assert patient_nudge_values == [
+            "DRINK_WATER",
+            "TAKE_MEDICATION",
+            "CHECK_BLOOD_PRESSURE",
+        ]
 
         with engine.begin() as connection:
             occurrence_id, admin_id = insert_reminder_action_fixture(connection)

@@ -162,3 +162,25 @@ class FCMSender:
                 "patient_id": str(patient_id),
             },
         )
+
+    def send_nudge(
+        self,
+        token: str,
+        *,
+        nudge_id,
+        patient_id,
+        nudge_type: str,
+        title: str,
+        body: str,
+    ) -> bool:
+        return self._send_message(
+            token,
+            title=title,
+            body=body,
+            data={
+                "type": "NUDGE",
+                "nudge_id": str(nudge_id),
+                "patient_id": str(patient_id),
+                "nudge_type": nudge_type,
+            },
+        )

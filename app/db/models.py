@@ -8,5 +8,6 @@ from app.alerts.model import Alert
 from app.alert_actions.model import AlertAction
 from app.household_access.model import CaregiverPatientAssignment, PatientAccessCode
 
-from app.devices.model import CaregiverPushDevice
+from app.devices.model import CaregiverPushDevice, PatientPushDevice
+from app.nudges.model import PatientNudge
 from app.reminders.model import ReminderAction, ReminderOccurrence, ReminderTemplate

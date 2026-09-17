@@ -13,7 +13,7 @@ from app.auth.security import create_access_token
 from app.core.config import Settings
 from app.core.time import utc_now
 from app.db.database import get_db
-from app.devices.model import CaregiverPushDevice
+from app.devices.model import CaregiverPushDevice, PatientPushDevice
 from app.event_evaluations.model import EventEvaluation
 from app.health_events.schema import HealthEventCreate
 from app.health_events.service import create_health_event
@@ -144,15 +144,14 @@ def test_delete_validation_and_role_auth(api, db_session, patient):
         api, "DELETE", {"token": "bad token"}, headers(actor, patient)
     ).json() == {"detail": "Invalid device token request."}
     patient_user = db_session.get(User, patient.user_id)
-    assert (
-        request(
-            api,
-            "POST",
-            {"token": "synthetic", "platform": "ANDROID"},
-            headers(patient_user, patient),
-        ).status_code
-        == 403
-    )
+    assert request(
+        api,
+        "POST",
+        {"token": "synthetic", "platform": "ANDROID"},
+        headers(patient_user, patient),
+    ).status_code == 200
+    patient_device = db_session.scalar(select(PatientPushDevice))
+    assert patient_device.user_id == patient_user.user_id
     actor.account_status = AccountStatus.DISABLED
     db_session.commit()
     assert (
