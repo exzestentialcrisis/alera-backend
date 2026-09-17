@@ -5,11 +5,20 @@ import logging
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 
-from app.reminders.notification_service import deliver_missed_reminder_notifications
+from app.reminders.notification_service import (
+    deliver_due_reminder_notifications,
+    deliver_missed_reminder_notifications,
+)
 
 
 logger = logging.getLogger(__name__)
 KEY = "alera_missed_reminder_notifications"
+DUE_KEY = "alera_due_reminder_notifications"
+
+
+def queue_due_reminder_notification(db: Session, occurrence_id) -> None:
+    transaction = db.get_nested_transaction() or db.get_transaction()
+    db.info.setdefault(DUE_KEY, {}).setdefault(transaction, set()).add(occurrence_id)
 
 
 def queue_missed_reminder_notification(db: Session, occurrence_id) -> None:
@@ -19,12 +28,13 @@ def queue_missed_reminder_notification(db: Session, occurrence_id) -> None:
 
 @event.listens_for(Session, "after_commit")
 def _after_commit(db: Session) -> None:
-    pending = db.info.get(KEY, {})
     nested = db.get_nested_transaction()
     if nested is not None:
-        ids = pending.pop(nested, set())
-        if ids:
-            pending.setdefault(nested.parent, set()).update(ids)
+        for key in (KEY, DUE_KEY):
+            pending = db.info.get(key, {})
+            ids = pending.pop(nested, set())
+            if ids:
+                pending.setdefault(nested.parent, set()).update(ids)
         return
     pending = db.info.pop(KEY, {})
     occurrence_ids = set().union(*pending.values()) if pending else set()
@@ -35,12 +45,20 @@ def _after_commit(db: Session) -> None:
             )
         except Exception:
             logger.warning("Post-commit missed reminder notification failed.")
+    due_pending = db.info.pop(DUE_KEY, {})
+    due_occurrence_ids = set().union(*due_pending.values()) if due_pending else set()
+    if due_occurrence_ids:
+        try:
+            deliver_due_reminder_notifications(db.get_bind(), due_occurrence_ids)
+        except Exception:
+            logger.warning("Post-commit due reminder notification failed.")
 
 
 @event.listens_for(Session, "after_transaction_end")
 def _after_transaction_end(db: Session, transaction) -> None:
-    pending = db.info.get(KEY)
-    if pending is not None:
-        pending.pop(transaction, None)
-        if transaction.parent is None:
-            db.info.pop(KEY, None)
+    for key in (KEY, DUE_KEY):
+        pending = db.info.get(key)
+        if pending is not None:
+            pending.pop(transaction, None)
+            if transaction.parent is None:
+                db.info.pop(key, None)

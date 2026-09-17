@@ -10,7 +10,10 @@ from app.reminders.enums import (
     ReminderOccurrenceStatus,
 )
 from app.reminders.model import ReminderAction, ReminderOccurrence, ReminderTemplate
-from app.reminders.notification_events import queue_missed_reminder_notification
+from app.reminders.notification_events import (
+    queue_due_reminder_notification,
+    queue_missed_reminder_notification,
+)
 
 
 DEFAULT_LIFECYCLE_BATCH_SIZE = 100
@@ -127,6 +130,26 @@ def process_reminder_lifecycle(
         occurrence.updated_at = now
         if target is ReminderOccurrenceStatus.DUE:
             marked_due += 1
+            db.add(
+                ReminderAction(
+                    reminder_occurrence_id=occurrence.reminder_occurrence_id,
+                    performed_by_user_id=None,
+                    action_type=ReminderActionType.MARK_DUE,
+                    action_note="Automatically marked due at the scheduled time.",
+                    previous_status=previous_status,
+                    new_status=ReminderOccurrenceStatus.DUE,
+                    action_metadata={
+                        "source": "reminder_lifecycle",
+                        "automated": True,
+                    },
+                    performed_at=now,
+                )
+            )
+            if template.notification_channels is ReminderNotificationChannel.PUSH:
+                queue_due_reminder_notification(
+                    db,
+                    occurrence.reminder_occurrence_id,
+                )
             continue
 
         marked_missed += 1

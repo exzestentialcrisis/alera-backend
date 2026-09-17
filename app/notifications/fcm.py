@@ -184,3 +184,27 @@ class FCMSender:
                 "nudge_type": nudge_type,
             },
         )
+
+    def send_patient_reminder(
+        self,
+        token: str,
+        *,
+        occurrence_id,
+        template_id,
+        patient_id,
+        title: str,
+        instructions: str | None,
+    ) -> bool:
+        body = instructions or "It's time for this reminder."
+        return self._send_message(
+            token,
+            title=title,
+            body=body,
+            data={
+                "type": "REMINDER_DUE",
+                "occurrence_id": str(occurrence_id),
+                "template_id": str(template_id),
+                "patient_id": str(patient_id),
+                "instructions": instructions or "",
+            },
+        )

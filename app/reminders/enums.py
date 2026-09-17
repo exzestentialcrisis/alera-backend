@@ -36,6 +36,7 @@ class ReminderOccurrenceStatus(str, enum.Enum):
 
 
 class ReminderActionType(str, enum.Enum):
+    MARK_DUE = "MARK_DUE"
     MARK_COMPLETED = "MARK_COMPLETED"
     SNOOZE = "SNOOZE"
     REQUEST_HELP = "REQUEST_HELP"

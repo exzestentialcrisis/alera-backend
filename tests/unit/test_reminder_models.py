@@ -141,5 +141,5 @@ def test_reminder_python_enum_values_match_database_values():
     assert [item.value for item in ReminderPriority] == ["LOW", "NORMAL", "HIGH"]
     assert [item.value for item in ReminderTemplateStatus] == ["ACTIVE", "DISABLED", "ARCHIVED"]
     assert [item.value for item in ReminderOccurrenceStatus] == ["UPCOMING", "DUE", "SNOOZED", "COMPLETED", "MISSED", "CANCELED", "COMPLETED_LATE"]
-    assert [item.value for item in ReminderActionType] == ["MARK_COMPLETED", "SNOOZE", "REQUEST_HELP", "CAREGIVER_OVERRIDE", "MARK_MISSED", "MARK_MISSED_HANDLED", "RESCHEDULE", "CANCEL", "ADD_NOTE", "FOLLOW_UP"]
+    assert [item.value for item in ReminderActionType] == ["MARK_DUE", "MARK_COMPLETED", "SNOOZE", "REQUEST_HELP", "CAREGIVER_OVERRIDE", "MARK_MISSED", "MARK_MISSED_HANDLED", "RESCHEDULE", "CANCEL", "ADD_NOTE", "FOLLOW_UP"]
     assert [item.value for item in ReminderNotificationChannel] == ["IN_APP", "PUSH", "SMS"]

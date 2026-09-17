@@ -477,7 +477,7 @@ def test_fresh_upgrade_downgrade_and_reupgrade(test_database_url):
             "reminder_priority_enum": ["LOW", "NORMAL", "HIGH"],
             "reminder_template_status_enum": ["ACTIVE", "DISABLED", "ARCHIVED"],
             "reminder_occurrence_status_enum": ["UPCOMING", "DUE", "SNOOZED", "COMPLETED", "MISSED", "CANCELED", "COMPLETED_LATE"],
-            "reminder_action_type_enum": ["MARK_COMPLETED", "SNOOZE", "REQUEST_HELP", "CAREGIVER_OVERRIDE", "MARK_MISSED", "MARK_MISSED_HANDLED", "RESCHEDULE", "CANCEL", "ADD_NOTE", "FOLLOW_UP"],
+            "reminder_action_type_enum": ["MARK_DUE", "MARK_COMPLETED", "SNOOZE", "REQUEST_HELP", "CAREGIVER_OVERRIDE", "MARK_MISSED", "MARK_MISSED_HANDLED", "RESCHEDULE", "CANCEL", "ADD_NOTE", "FOLLOW_UP"],
             "reminder_notification_channel_enum": ["IN_APP", "PUSH", "SMS"],
         }
         assert patient_nudge_values == [
