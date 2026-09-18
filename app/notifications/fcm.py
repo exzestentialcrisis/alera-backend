@@ -88,6 +88,7 @@ class FCMSender:
         title: str,
         body: str,
         data: dict[str, str],
+        data_only: bool = False,
     ) -> bool:
         """Return True only for a definitively invalid device registration."""
         if not self.configured:
@@ -100,11 +101,22 @@ class FCMSender:
                 json={
                     "message": {
                         "token": token,
-                        "notification": {
-                            "title": title,
-                            "body": body,
-                        },
+                        **(
+                            {}
+                            if data_only
+                            else {
+                                "notification": {
+                                    "title": title,
+                                    "body": body,
+                                }
+                            }
+                        ),
                         "data": data,
+                        **(
+                            {"android": {"priority": "HIGH"}}
+                            if data_only
+                            else {}
+                        ),
                     }
                 },
                 timeout=10,
@@ -206,5 +218,8 @@ class FCMSender:
                 "template_id": str(template_id),
                 "patient_id": str(patient_id),
                 "instructions": instructions or "",
+                "title": title,
+                "body": body,
             },
+            data_only=True,
         )

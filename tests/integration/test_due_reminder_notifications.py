@@ -95,17 +95,16 @@ def test_due_push_notifies_patient_after_commit_once(
     assert reminder_transport.call_count == 1
     assert reminder_transport.call_args.kwargs["json"]["message"] == {
         "token": "patient-due-device",
-        "notification": {
-            "title": "Evening medication",
-            "body": "Take one tablet",
-        },
         "data": {
             "type": "REMINDER_DUE",
             "occurrence_id": str(occurrence.reminder_occurrence_id),
             "template_id": str(template.reminder_template_id),
             "patient_id": str(patient.patient_id),
             "instructions": "Take one tablet",
+            "title": "Evening medication",
+            "body": "Take one tablet",
         },
+        "android": {"priority": "HIGH"},
     }
     action = db_session.scalar(
         select(ReminderAction).where(
