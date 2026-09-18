@@ -27,6 +27,22 @@ def test_upcoming_becomes_due_at_scheduled_time():
     ) is ReminderOccurrenceStatus.DUE
 
 
+def test_upcoming_becomes_due_within_one_minute_lead_window():
+    assert target(
+        ReminderOccurrenceStatus.UPCOMING,
+        scheduled_offset=1,
+        due_offset=16,
+    ) is ReminderOccurrenceStatus.DUE
+
+
+def test_upcoming_stays_upcoming_outside_one_minute_lead_window():
+    assert target(
+        ReminderOccurrenceStatus.UPCOMING,
+        scheduled_offset=1.01,
+        due_offset=16,
+    ) is ReminderOccurrenceStatus.UPCOMING
+
+
 def test_overdue_upcoming_catches_up_directly_to_missed():
     assert target(
         ReminderOccurrenceStatus.UPCOMING,

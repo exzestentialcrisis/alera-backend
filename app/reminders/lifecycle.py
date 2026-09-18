@@ -18,6 +18,7 @@ from app.reminders.notification_events import (
 
 DEFAULT_LIFECYCLE_BATCH_SIZE = 100
 MAX_LIFECYCLE_BATCH_SIZE = 500
+REMINDER_DUE_LEAD = timedelta(minutes=1)
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ def reminder_lifecycle_target(
     if status is ReminderOccurrenceStatus.UPCOMING:
         if now >= missed_at:
             return ReminderOccurrenceStatus.MISSED
-        if now >= scheduled:
+        if now >= scheduled - REMINDER_DUE_LEAD:
             return ReminderOccurrenceStatus.DUE
     elif status in {
         ReminderOccurrenceStatus.DUE,
@@ -92,7 +93,10 @@ def process_reminder_lifecycle(
                         ReminderOccurrence.status
                         == ReminderOccurrenceStatus.UPCOMING
                     )
-                    & (ReminderOccurrence.scheduled_at <= now),
+                    & (
+                        ReminderOccurrence.scheduled_at
+                        <= now + REMINDER_DUE_LEAD
+                    ),
                     (
                         ReminderOccurrence.status.in_(
                             [
@@ -135,7 +139,10 @@ def process_reminder_lifecycle(
                     reminder_occurrence_id=occurrence.reminder_occurrence_id,
                     performed_by_user_id=None,
                     action_type=ReminderActionType.MARK_DUE,
-                    action_note="Automatically marked due at the scheduled time.",
+                    action_note=(
+                        "Automatically marked due within the one-minute "
+                        "notification lead window."
+                    ),
                     previous_status=previous_status,
                     new_status=ReminderOccurrenceStatus.DUE,
                     action_metadata={
