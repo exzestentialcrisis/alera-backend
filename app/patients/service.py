@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 from app.alerts.model import Alert, AlertStatus
 from app.condition_trackers.model import ConditionTracker
 from app.core.time import utc_now
+from app.core.config import get_settings
+from app.patients.photo_storage import public_profile_photo_url
 from app.event_evaluations.model import EvaluationSeverity
 from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 from app.household_access.errors import AccessForbiddenError
@@ -32,8 +34,14 @@ from app.patients.schema import (
     MonitoringSettingsUpdate,
     ThresholdMode,
 )
+from app.core.config import get_settings
+from app.patients.photo_storage import public_profile_photo_url
 from app.users.model import AccountStatus, User, UserRole
-from app.activity.model import ( ActivityData, ActivityDailyData, ActivityType,)
+from app.activity.model import (
+    ActivityData,
+    ActivityDailyData,
+    ActivityType,
+)
 
 ACCEPTED_EVENT_STATUSES = (
     ValidationStatus.VALID_REALTIME,
@@ -83,11 +91,7 @@ def _summary_map(
     if not patients:
         return {}
     patient_ids = [patient.patient_id for patient in patients]
-    today = (
-        utc_now()
-        .astimezone(ZoneInfo("Asia/Manila"))
-        .date()
-    )
+    today = utc_now().astimezone(ZoneInfo("Asia/Manila")).date()
 
     step_rows = db.execute(
         select(
@@ -97,14 +101,12 @@ def _summary_map(
         )
         .join(
             ActivityDailyData,
-            ActivityDailyData.activity_data_id
-            == ActivityData.activity_data_id,
+            ActivityDailyData.activity_data_id == ActivityData.activity_data_id,
         )
         .where(
             ActivityData.patient_id.in_(patient_ids),
             ActivityData.activity_date == today,
-            ActivityData.activity_type
-            == ActivityType.STEPS,
+            ActivityData.activity_type == ActivityType.STEPS,
         )
     ).all()
 
@@ -118,20 +120,12 @@ def _summary_map(
             total_steps,
             updated_at,
         ) in step_rows
-    }    
+    }
     ranked_sleep = (
         select(
-            ActivityData.patient_id.label(
-                "patient_id"
-            ),
-            ActivityData.activity_date.label(
-                "activity_date"
-            ),
-            ActivityDailyData
-            .total_duration_seconds
-            .label(
-                "total_duration_seconds"
-            ),
+            ActivityData.patient_id.label("patient_id"),
+            ActivityData.activity_date.label("activity_date"),
+            ActivityDailyData.total_duration_seconds.label("total_duration_seconds"),
             func.row_number()
             .over(
                 partition_by=ActivityData.patient_id,
@@ -144,40 +138,29 @@ def _summary_map(
         )
         .join(
             ActivityDailyData,
-            ActivityDailyData.activity_data_id
-            == ActivityData.activity_data_id,
+            ActivityDailyData.activity_data_id == ActivityData.activity_data_id,
         )
         .where(
-            ActivityData.patient_id.in_(
-                patient_ids
-            ),
-            ActivityData.activity_type
-            == ActivityType.SLEEP,
-            ActivityDailyData
-            .total_duration_seconds
-            > 0,
+            ActivityData.patient_id.in_(patient_ids),
+            ActivityData.activity_type == ActivityType.SLEEP,
+            ActivityDailyData.total_duration_seconds > 0,
         )
         .subquery()
-    )   
+    )
 
-    sleep_rows = db.execute(
-        select(ranked_sleep).where(
-            ranked_sleep.c.position == 1
-        )
-    ).mappings().all()
+    sleep_rows = (
+        db.execute(select(ranked_sleep).where(ranked_sleep.c.position == 1))
+        .mappings()
+        .all()
+    )
 
     sleep_by_patient = {
         row["patient_id"]: (
-            int(
-                row[
-                    "total_duration_seconds"
-                ]
-            ),
+            int(row["total_duration_seconds"]),
             row["activity_date"],
         )
         for row in sleep_rows
     }
-
 
     ranked_events = (
         select(
@@ -186,14 +169,16 @@ def _summary_map(
             HealthEvent.numeric_value.label("numeric_value"),
             HealthEvent.metric_unit.label("metric_unit"),
             HealthEvent.recorded_at.label("recorded_at"),
-            func.row_number().over(
+            func.row_number()
+            .over(
                 partition_by=(HealthEvent.patient_id, HealthEvent.metric_type),
                 order_by=(
                     HealthEvent.recorded_at.desc(),
                     HealthEvent.received_at.desc(),
                     HealthEvent.event_id.desc(),
                 ),
-            ).label("position"),
+            )
+            .label("position"),
         )
         .where(
             HealthEvent.patient_id.in_(patient_ids),
@@ -203,9 +188,11 @@ def _summary_map(
         )
         .subquery()
     )
-    event_rows = db.execute(
-        select(ranked_events).where(ranked_events.c.position == 1)
-    ).mappings().all()
+    event_rows = (
+        db.execute(select(ranked_events).where(ranked_events.c.position == 1))
+        .mappings()
+        .all()
+    )
     readings: dict[UUID, dict[MetricType, LatestReading]] = {}
     for row in event_rows:
         readings.setdefault(row["patient_id"], {})[row["metric_type"]] = LatestReading(
@@ -231,9 +218,7 @@ def _summary_map(
         )
         .group_by(Alert.patient_id)
     ).all()
-    alerts = {
-        patient_id: (count, rank) for patient_id, count, rank in alert_rows
-    }
+    alerts = {patient_id: (count, rank) for patient_id, count, rank in alert_rows}
 
     # Caregiver alert workflow and current physiology are related but not
     # identical. An unresolved alert remains actionable after recovery, but
@@ -280,9 +265,7 @@ def _summary_map(
         .where(ConditionTracker.patient_id.in_(patient_ids))
         .group_by(ConditionTracker.patient_id)
     ).all()
-    tracker_monitoring_ranks = {
-        patient_id: rank for patient_id, rank in tracker_rows
-    }
+    tracker_monitoring_ranks = {patient_id: rank for patient_id, rank in tracker_rows}
 
     result = {}
     for patient in patients:
@@ -293,9 +276,7 @@ def _summary_map(
         heart_rate = patient_readings.get(MetricType.HEART_RATE)
         spo2 = patient_readings.get(MetricType.SPO2)
         check_ins = [
-            reading.recorded_at
-            for reading in (heart_rate, spo2)
-            if reading is not None
+            reading.recorded_at for reading in (heart_rate, spo2) if reading is not None
         ]
         alert_count, highest_rank = alerts.get(patient.patient_id, (0, None))
         highest = {
@@ -308,9 +289,7 @@ def _summary_map(
         # occurrence may drive monitoring_status. Patients without tracker
         # history retain the legacy alert-only fallback for compatibility.
         current_rank = tracker_monitoring_ranks.get(patient.patient_id)
-        monitoring_rank = (
-            highest_rank if current_rank is None else current_rank
-        )
+        monitoring_rank = highest_rank if current_rank is None else current_rank
         if monitoring_rank == 3:
             monitoring = MonitoringStatus.CRITICAL
         elif monitoring_rank == 2:
@@ -322,36 +301,19 @@ def _summary_map(
         result[patient.patient_id] = CurrentHealthSummary(
             latest_heart_rate=heart_rate,
             latest_spo2=spo2,
-
-            today_steps=(
-                step_summary[0]
-                if step_summary is not None
-                else None
-            ),
-            steps_updated_at=(
-                step_summary[1]
-                if step_summary is not None
-                else None
-            ),
-
+            today_steps=(step_summary[0] if step_summary is not None else None),
+            steps_updated_at=(step_summary[1] if step_summary is not None else None),
             latest_sleep_duration_seconds=(
-                sleep_summary[0]
-                if sleep_summary is not None
-                else None
+                sleep_summary[0] if sleep_summary is not None else None
             ),
-            latest_sleep_date=(
-                sleep_summary[1]
-                if sleep_summary is not None
-                else None
-            ),
-
+            latest_sleep_date=(sleep_summary[1] if sleep_summary is not None else None),
             last_check_in=max(check_ins) if check_ins else None,
             active_alert_count=alert_count,
             highest_active_alert_severity=highest,
             monitoring_status=monitoring,
             device_connection_status=patient.integration_status,
             last_device_sync_at=patient.last_sync_at,
-            )
+        )
     return result
 
 
@@ -383,11 +345,14 @@ def list_patients(
     filters: list[Any] = [ElderlyPatient.patient_id.in_(_patient_scope(actor))]
     if search:
         filters.append(User.full_name.ilike(f"%{search}%"))
-    total = db.scalar(
-        select(func.count(ElderlyPatient.patient_id))
-        .join(User, User.user_id == ElderlyPatient.user_id)
-        .where(*filters)
-    ) or 0
+    total = (
+        db.scalar(
+            select(func.count(ElderlyPatient.patient_id))
+            .join(User, User.user_id == ElderlyPatient.user_id)
+            .where(*filters)
+        )
+        or 0
+    )
     rows = db.execute(
         select(ElderlyPatient, User)
         .join(User, User.user_id == ElderlyPatient.user_id)
@@ -426,15 +391,15 @@ def get_patient(db: Session, actor: User, patient_id: UUID) -> PatientReadRow:
     patient, user = row
     assignment = _assignments_for_actor(db, actor, [patient_id]).get(patient_id)
     monitoring_devices = tuple(
-    db.scalars(
-        select(MonitoringDevice)
-        .where(
-            MonitoringDevice.patient_id == patient_id,
-        )
-        .order_by(MonitoringDevice.device_type)
+        db.scalars(
+            select(MonitoringDevice)
+            .where(
+                MonitoringDevice.patient_id == patient_id,
+            )
+            .order_by(MonitoringDevice.device_type)
         ).all()
-   )
-    
+    )
+
     return PatientReadRow(
         patient=patient,
         user=user,
@@ -521,6 +486,10 @@ def patient_read_payload(row: PatientReadRow, *, detail: bool) -> dict:
         "account_status": user.account_status,
         "created_at": patient.created_at,
         "current_summary": row.current_summary,
+        "profile_photo_url": public_profile_photo_url(
+            settings=get_settings(),
+            object_path=patient.profile_photo_path,
+        ),
     }
     if detail:
         payload.update(
@@ -566,8 +535,7 @@ def update_monitoring_settings(
     payload: MonitoringSettingsUpdate,
 ) -> MonitoringSettingsResponse:
     row = db.execute(
-        select(ElderlyPatient)
-        .where(
+        select(ElderlyPatient).where(
             ElderlyPatient.patient_id == patient_id,
             ElderlyPatient.patient_id.in_(_patient_scope(actor)),
         )
@@ -608,50 +576,81 @@ def update_monitoring_settings(
     )
 
 
-def create_patient(db: Session, actor: User, household_id: UUID,
-                   payload: PatientCreate) -> PatientCreated:
+def create_patient(
+    db: Session, actor: User, household_id: UUID, payload: PatientCreate
+) -> PatientCreated:
     household = db.get(Household, household_id)
     permitted = False
-    if (actor.account_status is AccountStatus.ACTIVE and household is not None
-            and household.household_status is HouseholdStatus.ACTIVE
-            and household.archived_at is None):
+    if (
+        actor.account_status is AccountStatus.ACTIVE
+        and household is not None
+        and household.household_status is HouseholdStatus.ACTIVE
+        and household.archived_at is None
+    ):
         if actor.role is UserRole.CARE_ADMIN:
             permitted = household.created_by_user_id == actor.user_id
         elif actor.role is UserRole.CAREGIVER:
-            permitted = db.scalar(
-                select(CaregiverPatientAssignment.assignment_id)
-                .join(ElderlyPatient, ElderlyPatient.patient_id == CaregiverPatientAssignment.patient_id)
-                .where(
-                    CaregiverPatientAssignment.caregiver_user_id == actor.user_id,
-                    CaregiverPatientAssignment.unassigned_at.is_(None),
-                    ElderlyPatient.household_id == household_id,
-                    ElderlyPatient.archived_at.is_(None),
-                ).limit(1)
-            ) is not None
+            permitted = (
+                db.scalar(
+                    select(CaregiverPatientAssignment.assignment_id)
+                    .join(
+                        ElderlyPatient,
+                        ElderlyPatient.patient_id
+                        == CaregiverPatientAssignment.patient_id,
+                    )
+                    .where(
+                        CaregiverPatientAssignment.caregiver_user_id == actor.user_id,
+                        CaregiverPatientAssignment.unassigned_at.is_(None),
+                        ElderlyPatient.household_id == household_id,
+                        ElderlyPatient.archived_at.is_(None),
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
     if not permitted:
-        raise AccessForbiddenError("Actor is not permitted to create patients in this household.")
+        raise AccessForbiddenError(
+            "Actor is not permitted to create patients in this household."
+        )
 
-    user = User(full_name=payload.full_name, phone_number=payload.phone_number,
-                role=UserRole.ELDERLY_PATIENT)
+    user = User(
+        full_name=payload.full_name,
+        phone_number=payload.phone_number,
+        role=UserRole.ELDERLY_PATIENT,
+    )
     db.add(user)
     db.flush()
-    fields = payload.model_dump(exclude={"full_name", "phone_number", "monitoring_notes"})
+    fields = payload.model_dump(
+        exclude={"full_name", "phone_number", "monitoring_notes"}
+    )
     patient = ElderlyPatient(
-        user_id=user.user_id, household_id=household_id,
-        health_notes=payload.monitoring_notes, **fields,
+        user_id=user.user_id,
+        household_id=household_id,
+        health_notes=payload.monitoring_notes,
+        **fields,
     )
     db.add(patient)
     db.flush()
     assignment = None
     if actor.role is UserRole.CAREGIVER:
         assignment = CaregiverPatientAssignment(
-            caregiver_user_id=actor.user_id, patient_id=patient.patient_id,
+            caregiver_user_id=actor.user_id,
+            patient_id=patient.patient_id,
             assigned_by_user_id=actor.user_id,
         )
         db.add(assignment)
         db.flush()
     return PatientCreated(
-        **payload.model_dump(), patient_id=patient.patient_id, user_id=user.user_id,
-        household_id=household_id, account_status=user.account_status,
-        archived_at=patient.archived_at, assignment=assignment, created_at=patient.created_at,
+        **payload.model_dump(),
+        patient_id=patient.patient_id,
+        user_id=user.user_id,
+        household_id=household_id,
+        account_status=user.account_status,
+        profile_photo_url=public_profile_photo_url(
+            settings=get_settings(),
+            object_path=patient.profile_photo_path,
+        ),
+        archived_at=patient.archived_at,
+        assignment=assignment,
+        created_at=patient.created_at,
     )

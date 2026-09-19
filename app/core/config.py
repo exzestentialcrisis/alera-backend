@@ -36,6 +36,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    supabase_url: str | None = None
+    supabase_secret_key: SecretStr | None = None
+    supabase_patient_photo_bucket: str = "patient-profile-photos"
+
 
 @lru_cache
 def get_settings() -> Settings:
