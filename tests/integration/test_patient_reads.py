@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import event
 
 from app.alerts.model import Alert, AlertStatus
+from app.condition_trackers.model import ConditionTracker
 from app.event_evaluations.model import ConditionKey, EvaluationSeverity
 from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 from app.core.time import utc_now
@@ -506,6 +507,71 @@ def test_active_alert_summary(api_app, db_session, severity, expected):
     )
     assert summary["highest_active_alert_severity"] == severity.value
     assert summary["monitoring_status"] == expected
+
+
+def test_recovered_tracker_returns_monitoring_to_stable_without_closing_alert(
+    api_app,
+    db_session,
+):
+    scope = setup_scope(db_session)
+    patient = scope["assigned"]
+
+    critical_event = add_event(
+        db_session,
+        patient,
+        MetricType.HEART_RATE,
+        160,
+        NOW,
+    )
+    alert = add_alert(
+        db_session,
+        patient,
+        EvaluationSeverity.CRITICAL,
+    )
+    tracker = ConditionTracker(
+        patient_id=patient.patient_id,
+        last_event_id=critical_event.event_id,
+        condition_key=ConditionKey.HR_HIGH,
+        active=True,
+        started_at=alert.detected_at,
+        last_seen_at=critical_event.recorded_at,
+        confirmed_at=alert.confirmed_at,
+    )
+    db_session.add(tracker)
+    db_session.commit()
+
+    critical_summary = get_list(
+        api_app,
+        scope["caregiver"],
+        scope["household"],
+    ).json()["items"][0]["current_summary"]
+    assert critical_summary["monitoring_status"] == "CRITICAL"
+    assert critical_summary["active_alert_count"] == 1
+
+    recovered_event = add_event(
+        db_session,
+        patient,
+        MetricType.HEART_RATE,
+        78,
+        NOW + timedelta(minutes=2),
+    )
+    tracker.last_event_id = recovered_event.event_id
+    tracker.last_seen_at = recovered_event.recorded_at
+    tracker.active = False
+    db_session.commit()
+
+    recovered_summary = get_list(
+        api_app,
+        scope["caregiver"],
+        scope["household"],
+    ).json()["items"][0]["current_summary"]
+
+    # The alert remains part of the caregiver workflow, but current patient
+    # physiology is no longer reported as Critical after confirmed recovery.
+    assert recovered_summary["active_alert_count"] == 1
+    assert recovered_summary["highest_active_alert_severity"] == "CRITICAL"
+    assert recovered_summary["monitoring_status"] == "STABLE"
+    assert recovered_summary["latest_heart_rate"]["value"] == "78.00"
 
 
 def test_list_query_count_is_constant(api_app, db_session, integration_engine):

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, case, func, select
+from sqlalchemy import Select, and_, case, func, select
 from sqlalchemy.orm import Session
 
 from app.monitoring_devices.model import MonitoringDevice
@@ -10,6 +10,7 @@ from app.monitoring_devices.model import MonitoringDevice
 from zoneinfo import ZoneInfo
 
 from app.alerts.model import Alert, AlertStatus
+from app.condition_trackers.model import ConditionTracker
 from app.core.time import utc_now
 from app.event_evaluations.model import EvaluationSeverity
 from app.health_events.model import HealthEvent, MetricType, ValidationStatus
@@ -233,6 +234,56 @@ def _summary_map(
     alerts = {
         patient_id: (count, rank) for patient_id, count, rank in alert_rows
     }
+
+    # Caregiver alert workflow and current physiology are related but not
+    # identical. An unresolved alert remains actionable after recovery, but
+    # it must stop driving the patient's current monitoring status once its
+    # tracker occurrence is no longer active.
+    current_state_rank = case(
+        (
+            and_(
+                ConditionTracker.active.is_(True),
+                Alert.severity == EvaluationSeverity.CRITICAL,
+            ),
+            3,
+        ),
+        (
+            and_(
+                ConditionTracker.active.is_(True),
+                Alert.severity == EvaluationSeverity.WARNING,
+            ),
+            2,
+        ),
+        (
+            and_(
+                ConditionTracker.active.is_(True),
+                Alert.alert_id.is_not(None),
+            ),
+            1,
+        ),
+        else_=0,
+    )
+    tracker_rows = db.execute(
+        select(
+            ConditionTracker.patient_id,
+            func.max(current_state_rank),
+        )
+        .outerjoin(
+            Alert,
+            and_(
+                Alert.patient_id == ConditionTracker.patient_id,
+                Alert.condition_key == ConditionTracker.condition_key,
+                Alert.detected_at == ConditionTracker.started_at,
+                Alert.status.in_(ACTIVE_ALERT_STATUSES),
+            ),
+        )
+        .where(ConditionTracker.patient_id.in_(patient_ids))
+        .group_by(ConditionTracker.patient_id)
+    ).all()
+    tracker_monitoring_ranks = {
+        patient_id: rank for patient_id, rank in tracker_rows
+    }
+
     result = {}
     for patient in patients:
         patient_readings = readings.get(patient.patient_id, {})
@@ -252,9 +303,17 @@ def _summary_map(
             2: EvaluationSeverity.WARNING,
             1: EvaluationSeverity.INFO,
         }.get(highest_rank)
-        if highest is EvaluationSeverity.CRITICAL:
+
+        # If tracker history exists, only an alert tied to an ACTIVE current
+        # occurrence may drive monitoring_status. Patients without tracker
+        # history retain the legacy alert-only fallback for compatibility.
+        current_rank = tracker_monitoring_ranks.get(patient.patient_id)
+        monitoring_rank = (
+            highest_rank if current_rank is None else current_rank
+        )
+        if monitoring_rank == 3:
             monitoring = MonitoringStatus.CRITICAL
-        elif highest is EvaluationSeverity.WARNING:
+        elif monitoring_rank == 2:
             monitoring = MonitoringStatus.WARNING
         elif check_ins:
             monitoring = MonitoringStatus.STABLE
