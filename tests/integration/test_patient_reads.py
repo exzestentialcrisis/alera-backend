@@ -188,6 +188,10 @@ def test_assignment_and_admin_scopes(api_app, db_session):
     assert caregiver["items"][0]["current_summary"] == {
         "latest_heart_rate": None,
         "latest_spo2": None,
+        "today_steps": None,
+        "steps_updated_at": None,
+        "latest_sleep_duration_seconds": None,
+        "latest_sleep_date": None,
         "last_check_in": None,
         "active_alert_count": 0,
         "highest_active_alert_severity": None,
@@ -593,4 +597,7 @@ def test_list_query_count_is_constant(api_app, db_session, integration_engine):
         event.remove(integration_engine, "before_cursor_execute", count_statement)
     assert response.status_code == 200
     assert response.json()["total"] == 9
-    assert len(statements) <= 6
+    # Patient-list reads use a fixed number of page/summary queries. Steps,
+    # sleep, current monitoring state, and alert workflow each add one bounded
+    # query, but the count must remain constant as the patient count grows.
+    assert len(statements) <= 8
