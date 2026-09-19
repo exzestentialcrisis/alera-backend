@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.monitoring_devices.model import MonitoringDevice
 
+from zoneinfo import ZoneInfo
+
 from app.alerts.model import Alert, AlertStatus
 from app.core.time import utc_now
 from app.event_evaluations.model import EvaluationSeverity
@@ -30,7 +32,7 @@ from app.patients.schema import (
     ThresholdMode,
 )
 from app.users.model import AccountStatus, User, UserRole
-
+from app.activity.model import ( ActivityData, ActivityDailyData, ActivityType,)
 
 ACCEPTED_EVENT_STATUSES = (
     ValidationStatus.VALID_REALTIME,
@@ -80,6 +82,102 @@ def _summary_map(
     if not patients:
         return {}
     patient_ids = [patient.patient_id for patient in patients]
+    today = (
+        utc_now()
+        .astimezone(ZoneInfo("Asia/Manila"))
+        .date()
+    )
+
+    step_rows = db.execute(
+        select(
+            ActivityData.patient_id,
+            ActivityDailyData.total_steps,
+            ActivityDailyData.updated_at,
+        )
+        .join(
+            ActivityDailyData,
+            ActivityDailyData.activity_data_id
+            == ActivityData.activity_data_id,
+        )
+        .where(
+            ActivityData.patient_id.in_(patient_ids),
+            ActivityData.activity_date == today,
+            ActivityData.activity_type
+            == ActivityType.STEPS,
+        )
+    ).all()
+
+    steps_by_patient = {
+        patient_id: (
+            total_steps,
+            updated_at,
+        )
+        for (
+            patient_id,
+            total_steps,
+            updated_at,
+        ) in step_rows
+    }    
+    ranked_sleep = (
+        select(
+            ActivityData.patient_id.label(
+                "patient_id"
+            ),
+            ActivityData.activity_date.label(
+                "activity_date"
+            ),
+            ActivityDailyData
+            .total_duration_seconds
+            .label(
+                "total_duration_seconds"
+            ),
+            func.row_number()
+            .over(
+                partition_by=ActivityData.patient_id,
+                order_by=(
+                    ActivityData.activity_date.desc(),
+                    ActivityDailyData.updated_at.desc(),
+                ),
+            )
+            .label("position"),
+        )
+        .join(
+            ActivityDailyData,
+            ActivityDailyData.activity_data_id
+            == ActivityData.activity_data_id,
+        )
+        .where(
+            ActivityData.patient_id.in_(
+                patient_ids
+            ),
+            ActivityData.activity_type
+            == ActivityType.SLEEP,
+            ActivityDailyData
+            .total_duration_seconds
+            > 0,
+        )
+        .subquery()
+    )   
+
+    sleep_rows = db.execute(
+        select(ranked_sleep).where(
+            ranked_sleep.c.position == 1
+        )
+    ).mappings().all()
+
+    sleep_by_patient = {
+        row["patient_id"]: (
+            int(
+                row[
+                    "total_duration_seconds"
+                ]
+            ),
+            row["activity_date"],
+        )
+        for row in sleep_rows
+    }
+
+
     ranked_events = (
         select(
             HealthEvent.patient_id.label("patient_id"),
@@ -138,6 +236,9 @@ def _summary_map(
     result = {}
     for patient in patients:
         patient_readings = readings.get(patient.patient_id, {})
+        step_summary = steps_by_patient.get(patient.patient_id)
+        sleep_summary = sleep_by_patient.get(patient.patient_id)
+
         heart_rate = patient_readings.get(MetricType.HEART_RATE)
         spo2 = patient_readings.get(MetricType.SPO2)
         check_ins = [
@@ -162,13 +263,36 @@ def _summary_map(
         result[patient.patient_id] = CurrentHealthSummary(
             latest_heart_rate=heart_rate,
             latest_spo2=spo2,
+
+            today_steps=(
+                step_summary[0]
+                if step_summary is not None
+                else None
+            ),
+            steps_updated_at=(
+                step_summary[1]
+                if step_summary is not None
+                else None
+            ),
+
+            latest_sleep_duration_seconds=(
+                sleep_summary[0]
+                if sleep_summary is not None
+                else None
+            ),
+            latest_sleep_date=(
+                sleep_summary[1]
+                if sleep_summary is not None
+                else None
+            ),
+
             last_check_in=max(check_ins) if check_ins else None,
             active_alert_count=alert_count,
             highest_active_alert_severity=highest,
             monitoring_status=monitoring,
             device_connection_status=patient.integration_status,
             last_device_sync_at=patient.last_sync_at,
-        )
+            )
     return result
 
 

@@ -59,6 +59,13 @@ class LatestReading(BaseModel):
 class CurrentHealthSummary(BaseModel):
     latest_heart_rate: LatestReading | None
     latest_spo2: LatestReading | None
+
+    today_steps: int | None = None
+    steps_updated_at: datetime | None = None
+
+    latest_sleep_duration_seconds: int | None = None
+    latest_sleep_date: date | None = None
+
     last_check_in: datetime | None
     active_alert_count: int
     highest_active_alert_severity: EvaluationSeverity | None
