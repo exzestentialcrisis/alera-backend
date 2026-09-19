@@ -55,9 +55,15 @@ def deliver_alert_notifications(bind, notification_intents):
                 event = db.get(HealthEvent, evaluation.event_id) if evaluation else None
                 patient = db.get(ElderlyPatient, alert.patient_id)
                 user = db.get(User, patient.user_id) if patient else None
-                title, body = notification_content(
-                    alert_display_payload(alert, evaluation, event, patient, user)
+                display_payload = alert_display_payload(
+                    alert,
+                    evaluation,
+                    event,
+                    patient,
+                    user,
                 )
+                title, body = notification_content(display_payload)
+                metric_type = display_payload.get("metric_type")
                 devices = db.scalars(
                     select(CaregiverPushDevice)
                     .join(User, User.user_id == CaregiverPushDevice.user_id)
@@ -79,6 +85,12 @@ def deliver_alert_notifications(bind, notification_intents):
                             device.fcm_token,
                             alert_id=alert.alert_id,
                             patient_id=alert.patient_id,
+                            patient_display_name=(
+                                display_payload.get("patient_display_name") or ""
+                            ),
+                            metric_type=(
+                                metric_type.value if metric_type is not None else ""
+                            ),
                             title=title,
                             body=body,
                         )

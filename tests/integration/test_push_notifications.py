@@ -240,15 +240,16 @@ def test_only_active_assigned_devices_and_exact_payload(
     for message in messages:
         assert message == {
             "token": message["token"],
-            "notification": {
-                "title": "Critical: High Heart Rate",
-                "body": "Test Patient • 151 BPM",
-            },
             "data": {
                 "type": "ALERT",
                 "alert_id": str(alert.alert_id),
                 "patient_id": str(patient.patient_id),
+                "patient_display_name": "Test Patient",
+                "metric_type": "HEART_RATE",
+                "title": "Critical: High Heart Rate",
+                "body": "Test Patient • 151 BPM",
             },
+            "android": {"priority": "HIGH"},
         }
     critical(db_session, event_payload)  # Idempotent ingestion.
     critical(db_session, {**event_payload, "external_event_id": str(uuid4())})
@@ -396,14 +397,17 @@ def test_warning_qualification_and_critical_escalation_each_send_once(
     escalation = transport.call_args.kwargs["json"]["message"]
     unit = "BPM" if metric == "HEART_RATE" else "%"
     separator = " " if metric == "HEART_RATE" else ""
-    assert escalation["notification"] == {
-        "title": (
-            "Critical: High Heart Rate"
-            if metric == "HEART_RATE"
-            else "Critical: Low SpO₂"
-        ),
-        "body": f"Test Patient • {critical_value}{separator}{unit}",
-    }
+    assert "notification" not in escalation
+    assert escalation["android"] == {"priority": "HIGH"}
+    assert escalation["data"]["metric_type"] == metric
+    assert escalation["data"]["title"] == (
+        "Critical: High Heart Rate"
+        if metric == "HEART_RATE"
+        else "Critical: Low SpO₂"
+    )
+    assert escalation["data"]["body"] == (
+        f"Test Patient • {critical_value}{separator}{unit}"
+    )
     ingest(critical_value, offsets[-1] + 75)
     assert transport.call_count == 2
     assert len(db_session.scalars(select(Alert)).all()) == 1
@@ -440,10 +444,10 @@ def test_acknowledged_warning_still_sends_critical_escalation(
     assert transport.call_count == 2
     assert alert.status is AlertStatus.ACKNOWLEDGED
     assert alert.severity.value == "CRITICAL"
-    assert transport.call_args.kwargs["json"]["message"]["notification"] == {
-        "title": "Critical: High Heart Rate",
-        "body": "Test Patient • 151 BPM",
-    }
+    message = transport.call_args.kwargs["json"]["message"]
+    assert "notification" not in message
+    assert message["data"]["title"] == "Critical: High Heart Rate"
+    assert message["data"]["body"] == "Test Patient • 151 BPM"
 
 
 def test_new_critical_occurrence_sends_again_while_prior_alert_is_unresolved(
@@ -477,10 +481,10 @@ def test_new_critical_occurrence_sends_again_while_prior_alert_is_unresolved(
     assert transport.call_count == 2
     assert recurring_alert_id != first_alert_id
     assert len(db_session.scalars(select(Alert)).all()) == 2
-    assert transport.call_args.kwargs["json"]["message"]["notification"] == {
-        "title": "Critical: High Heart Rate",
-        "body": "Test Patient • 165 BPM",
-    }
+    message = transport.call_args.kwargs["json"]["message"]
+    assert "notification" not in message
+    assert message["data"]["title"] == "Critical: High Heart Rate"
+    assert message["data"]["body"] == "Test Patient • 165 BPM"
 
 
 def test_invalid_cleanup_preserves_concurrently_refreshed_registration(

@@ -139,8 +139,15 @@ class FCMSender:
             return False
 
     def send(
-        self, token: str, *, alert_id, patient_id,
-        title: str = DEFAULT_TITLE, body: str = DEFAULT_BODY,
+        self,
+        token: str,
+        *,
+        alert_id,
+        patient_id,
+        patient_display_name: str = "",
+        metric_type: str = "",
+        title: str = DEFAULT_TITLE,
+        body: str = DEFAULT_BODY,
     ) -> bool:
         return self._send_message(
             token,
@@ -150,7 +157,12 @@ class FCMSender:
                 "type": "ALERT",
                 "alert_id": str(alert_id),
                 "patient_id": str(patient_id),
+                "patient_display_name": patient_display_name,
+                "metric_type": metric_type,
+                "title": title,
+                "body": body,
             },
+            data_only=True,
         )
 
     def send_reminder(
