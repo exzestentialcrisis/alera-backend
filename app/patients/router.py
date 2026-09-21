@@ -1,7 +1,15 @@
 from uuid import UUID
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -21,6 +29,7 @@ from app.patients.schema import (
     PatientListResponse,
     MonitoringSettingsResponse,
     MonitoringSettingsUpdate,
+    PatientProfilePhotoResponse,
 )
 from app.patients.service import (
     create_patient,
@@ -29,6 +38,14 @@ from app.patients.service import (
     patient_read_payload,
     update_monitoring_settings,
     MonitoringSettingsValidationError,
+)
+from app.patients.photo_storage import (
+    ALLOWED_PROFILE_PHOTO_TYPES,
+    MAX_PROFILE_PHOTO_BYTES,
+    PatientPhotoStorageError,
+    build_profile_photo_path,
+    public_profile_photo_url,
+    upload_profile_photo,
 )
 from app.users.model import User
 from app.health_events.model import MetricType
@@ -117,6 +134,103 @@ def read_vital_trends(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
+
+
+@router.post(
+    "/{patient_id}/profile-photo",
+    response_model=PatientProfilePhotoResponse,
+    summary="Upload a patient profile photo",
+    responses={
+        404: {"description": "Patient not found in the actor's scope."},
+        413: {"description": "Profile photo exceeds the maximum size."},
+        415: {"description": "Unsupported image type."},
+        503: {"description": "Profile photo storage is unavailable."},
+    },
+)
+async def upload_patient_profile_photo(
+    patient_id: UUID,
+    file: UploadFile = File(...),
+    actor: User = Depends(get_current_caregiver),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+):
+    try:
+        row = get_patient(db, actor, patient_id)
+
+        content_type = (file.content_type or "").lower()
+
+        if content_type not in ALLOWED_PROFILE_PHOTO_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="Profile photo must be JPEG, PNG, or WebP.",
+            )
+
+        content = await file.read(MAX_PROFILE_PHOTO_BYTES + 1)
+
+        if len(content) > MAX_PROFILE_PHOTO_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="Profile photo must be 5 MB or smaller.",
+            )
+
+        if not content:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Profile photo cannot be empty.",
+            )
+
+        object_path = build_profile_photo_path(
+            patient_id=str(patient_id),
+            content_type=content_type,
+        )
+
+        upload_profile_photo(
+            settings=settings,
+            object_path=object_path,
+            content=content,
+            content_type=content_type,
+        )
+
+        row.patient.profile_photo_path = object_path
+        db.commit()
+
+        profile_photo_url = public_profile_photo_url(
+            settings=settings,
+            object_path=object_path,
+        )
+
+        if profile_photo_url is None:
+            raise PatientPhotoStorageError("Profile photo URL could not be generated.")
+
+        return PatientProfilePhotoResponse(
+            patient_id=patient_id,
+            profile_photo_url=profile_photo_url,
+        )
+
+    except PatientNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    except PatientPhotoStorageError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        await file.close()
 
 
 @router.get(

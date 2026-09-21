@@ -25,11 +25,28 @@ def ingest(db, patient, metric_type, value, when):
     )
 
 
-def test_normal_event_resolves_all_metric_conditions(db_session, patient):
+def test_confirmed_recovery_resolves_all_metric_conditions(db_session, patient):
     now = datetime(2026, 7, 17, 5, tzinfo=timezone.utc)
     ingest(db_session, patient, MetricType.HEART_RATE, "110", now)
-    ingest(db_session, patient, MetricType.HEART_RATE, "45", now + timedelta(seconds=1))
-    ingest(db_session, patient, MetricType.HEART_RATE, "78", now + timedelta(seconds=2))
+    ingest(
+        db_session,
+        patient,
+        MetricType.HEART_RATE,
+        "45",
+        now + timedelta(seconds=16),
+    )
+
+    # Six clean 15-second buckets are not enough to satisfy the 90-second
+    # recovery rule.
+    for offset in range(30, 120, 15):
+        ingest(
+            db_session,
+            patient,
+            MetricType.HEART_RATE,
+            "78",
+            now + timedelta(seconds=offset),
+        )
+
     trackers = db_session.scalars(
         select(ConditionTracker).where(
             ConditionTracker.patient_id == patient.patient_id
@@ -39,6 +56,24 @@ def test_normal_event_resolves_all_metric_conditions(db_session, patient):
         ConditionKey.HR_HIGH,
         ConditionKey.HR_LOW,
     }
+    assert all(item.active is True for item in trackers)
+
+    # The seventh normal bucket completes the 90-second recovery window and
+    # resolves every active heart-rate condition for this patient.
+    ingest(
+        db_session,
+        patient,
+        MetricType.HEART_RATE,
+        "78",
+        now + timedelta(seconds=120),
+    )
+
+    db_session.expire_all()
+    trackers = db_session.scalars(
+        select(ConditionTracker).where(
+            ConditionTracker.patient_id == patient.patient_id
+        )
+    ).all()
     assert all(item.active is False for item in trackers)
 
 

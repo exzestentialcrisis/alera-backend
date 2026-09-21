@@ -86,12 +86,24 @@ class ElderlyPatient(Base):
 
     nickname: Mapped[str | None] = mapped_column(String(100), nullable=True)
     birthdate: Mapped[date | None] = mapped_column(Date, nullable=True)
-    sex: Mapped[Sex | None] = mapped_column(Enum(Sex, name="patient_sex"), nullable=True)
+    sex: Mapped[Sex | None] = mapped_column(
+        Enum(Sex, name="patient_sex"), nullable=True
+    )
 
     address_or_room: Mapped[str | None] = mapped_column(Text, nullable=True)
-    emergency_contact_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
-    emergency_contact_phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    baseline_heart_rate: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    profile_photo_path: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+    emergency_contact_name: Mapped[str | None] = mapped_column(
+        String(150), nullable=True
+    )
+    emergency_contact_phone: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    baseline_heart_rate: Mapped[Decimal | None] = mapped_column(
+        Numeric(6, 2), nullable=True
+    )
     baseline_spo2: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
 
     known_conditions: Mapped[str | None] = mapped_column(Text, nullable=True)

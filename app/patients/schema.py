@@ -12,6 +12,7 @@ from app.users.model import AccountStatus
 
 from app.monitoring_devices.schema import MonitoringDeviceRead
 
+
 class PatientCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -41,6 +42,7 @@ class PatientCreated(PatientCreate):
     archived_at: datetime | None
     assignment: CaregiverAssignmentResponse | None
     created_at: datetime
+    profile_photo_url: str | None = None
 
 
 class MonitoringStatus(str, enum.Enum):
@@ -86,6 +88,7 @@ class PatientListItem(BaseModel):
     account_status: AccountStatus
     created_at: datetime
     current_summary: CurrentHealthSummary
+    profile_photo_url: str | None = None
 
 
 class PatientListResponse(BaseModel):
@@ -157,3 +160,13 @@ class MonitoringSettingsResponse(BaseModel):
     usual_spo2_min: int
     usual_spo2_max: int | None
     updated_at: datetime
+
+
+class PatientProfilePhotoResponse(BaseModel):
+    patient_id: UUID
+    profile_photo_url: str
+
+
+class PatientProfilePhotoResponse(BaseModel):
+    patient_id: UUID
+    profile_photo_url: str

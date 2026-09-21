@@ -2,15 +2,86 @@
 
 ## Test databases
 
-Database-free tests run without `DATABASE_URL`. PostgreSQL integration tests require
-an isolated `TEST_DATABASE_URL`; as a safety guard, its database name must contain
-`test` and it must not equal `DATABASE_URL`. The integration suite migrates and
-truncates only that test database.
+Database-free tests run without PostgreSQL. Integration tests use one isolated
+local PostgreSQL database with this canonical development identity:
+
+| Setting | Canonical value |
+| --- | --- |
+| Database | `alera_test` |
+| Role | `alera_test_user` |
+| Password | `alera_test` |
+| Host | `localhost` |
+| Port | `5432` by default |
+
+These credentials are for the local test database only. Do not reuse them for
+development, Supabase, Render, staging, or production.
+
+### One-time Fedora setup
+
+Create the canonical role if it does not already exist:
 
 ```bash
-pytest -v
-TEST_DATABASE_URL=postgresql+psycopg://.../alera_test pytest -m integration -v
+sudo -u postgres psql -tc \
+  "SELECT 1 FROM pg_roles WHERE rolname = 'alera_test_user'" |
+  grep -q 1 ||
+  sudo -u postgres psql -c \
+    "CREATE ROLE alera_test_user LOGIN PASSWORD 'alera_test';"
 ```
+
+Normalize its password:
+
+```bash
+sudo -u postgres psql -c \
+  "ALTER ROLE alera_test_user WITH LOGIN PASSWORD 'alera_test';"
+```
+
+Create the canonical database if it does not already exist:
+
+```bash
+sudo -u postgres psql -tc \
+  "SELECT 1 FROM pg_database WHERE datname = 'alera_test'" |
+  grep -q 1 ||
+  sudo -u postgres createdb -O alera_test_user alera_test
+```
+
+Ensure the canonical role owns it:
+
+```bash
+sudo -u postgres psql -c \
+  "ALTER DATABASE alera_test OWNER TO alera_test_user;"
+```
+
+Then create the machine-local test environment file:
+
+```bash
+cp .env.test.example .env.test
+```
+
+The committed template uses PostgreSQL's default port:
+
+```text
+postgresql+psycopg://alera_test_user:alera_test@localhost:5432/alera_test
+```
+
+If PostgreSQL uses another local port on a machine, change only the port in that
+machine's ignored `.env.test`. For example, the Windows installation that uses
+port `3432` should use `localhost:3432`.
+
+`tests/conftest.py` automatically loads `.env.test`. An explicitly exported
+`TEST_DATABASE_URL` still takes precedence, which keeps CI configuration simple.
+
+### Running tests
+
+```bash
+python -m pytest -q
+python -m pytest -m integration -q
+```
+
+As safety guards, integration tests reject a `TEST_DATABASE_URL` equal to
+`DATABASE_URL`, and the database name must contain `test`. The suite runs
+`alembic upgrade head` against the isolated test database and truncates its test
+tables between cases. Never point `TEST_DATABASE_URL` at `alera_dev`, Supabase,
+Render, or any database containing data you want to keep.
 
 The migration that adds `HR_NORMAL` and `SPO2_NORMAL` is partially irreversible:
 its downgrade retains those PostgreSQL enum values because removing enum members is

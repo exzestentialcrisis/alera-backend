@@ -18,6 +18,10 @@ from app.users.model import User, UserRole
 
 ROOT = Path(__file__).resolve().parents[1]
 
+from dotenv import load_dotenv
+
+load_dotenv(ROOT / ".env.test", override=False)
+
 
 def _validated_test_url() -> str | None:
     value = os.getenv("TEST_DATABASE_URL")

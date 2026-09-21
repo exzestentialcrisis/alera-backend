@@ -12,6 +12,7 @@ from app.patients.model import ElderlyPatient
 from app.notifications.content import notification_content
 from app.household_access.model import CaregiverPatientAssignment
 from app.notifications.fcm import FCMSender
+from app.patients.photo_storage import public_profile_photo_url
 from app.users.model import AccountStatus, User, UserRole
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,8 @@ def deliver_alert_notifications(bind, notification_intents):
     from app.alerts.service import alert_display_payload
 
     try:
-        sender = FCMSender(get_settings())
+        settings = get_settings()
+        sender = FCMSender(settings)
         if not sender.configured:
             return
         include_acknowledged = {}
@@ -81,6 +83,14 @@ def deliver_alert_notifications(bind, notification_intents):
                 ).all()
                 for device in devices:
                     try:
+                        patient_photo_url = (
+                            public_profile_photo_url(
+                                settings=settings,
+                                object_path=patient.profile_photo_path,
+                            )
+                            if patient is not None
+                            else None
+                        )
                         invalid = sender.send(
                             device.fcm_token,
                             alert_id=alert.alert_id,
@@ -88,6 +98,7 @@ def deliver_alert_notifications(bind, notification_intents):
                             patient_display_name=(
                                 display_payload.get("patient_display_name") or ""
                             ),
+                            patient_photo_url=patient_photo_url or "",
                             metric_type=(
                                 metric_type.value if metric_type is not None else ""
                             ),

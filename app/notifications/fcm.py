@@ -24,12 +24,17 @@ class FCMSender:
         if not self.settings.fcm_enabled:
             logger.info("FCM_ENABLED is false; delivery skipped.")
             return False
-        if not self.settings.firebase_project_id or not self.settings.firebase_project_id.strip():
+        if (
+            not self.settings.firebase_project_id
+            or not self.settings.firebase_project_id.strip()
+        ):
             logger.warning("FIREBASE_PROJECT_ID is missing; delivery skipped.")
             return False
         secret = self.settings.firebase_service_account_json
         if secret is None or not secret.get_secret_value().strip():
-            logger.warning("FIREBASE_SERVICE_ACCOUNT_JSON is missing; delivery skipped.")
+            logger.warning(
+                "FIREBASE_SERVICE_ACCOUNT_JSON is missing; delivery skipped."
+            )
             return False
         if not re.fullmatch(
             r"[a-z][a-z0-9-]{4,61}[a-z0-9]", self.settings.firebase_project_id
@@ -49,7 +54,9 @@ class FCMSender:
             not isinstance(info.get(field), str) or not info[field].strip()
             for field in ("project_id", "client_email", "private_key")
         ):
-            logger.warning("Required service-account fields are missing; delivery skipped.")
+            logger.warning(
+                "Required service-account fields are missing; delivery skipped."
+            )
             return False
         if info["project_id"] != self.settings.firebase_project_id:
             logger.warning(
@@ -112,11 +119,7 @@ class FCMSender:
                             }
                         ),
                         "data": data,
-                        **(
-                            {"android": {"priority": "HIGH"}}
-                            if data_only
-                            else {}
-                        ),
+                        **({"android": {"priority": "HIGH"}} if data_only else {}),
                     }
                 },
                 timeout=10,
@@ -145,6 +148,7 @@ class FCMSender:
         alert_id,
         patient_id,
         patient_display_name: str = "",
+        patient_photo_url: str = "",
         metric_type: str = "",
         title: str = DEFAULT_TITLE,
         body: str = DEFAULT_BODY,
@@ -158,6 +162,7 @@ class FCMSender:
                 "alert_id": str(alert_id),
                 "patient_id": str(patient_id),
                 "patient_display_name": patient_display_name,
+                "patient_photo_url": patient_photo_url,
                 "metric_type": metric_type,
                 "title": title,
                 "body": body,

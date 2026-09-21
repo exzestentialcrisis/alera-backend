@@ -144,12 +144,15 @@ def test_delete_validation_and_role_auth(api, db_session, patient):
         api, "DELETE", {"token": "bad token"}, headers(actor, patient)
     ).json() == {"detail": "Invalid device token request."}
     patient_user = db_session.get(User, patient.user_id)
-    assert request(
-        api,
-        "POST",
-        {"token": "synthetic", "platform": "ANDROID"},
-        headers(patient_user, patient),
-    ).status_code == 200
+    assert (
+        request(
+            api,
+            "POST",
+            {"token": "synthetic", "platform": "ANDROID"},
+            headers(patient_user, patient),
+        ).status_code
+        == 200
+    )
     patient_device = db_session.scalar(select(PatientPushDevice))
     assert patient_device.user_id == patient_user.user_id
     actor.account_status = AccountStatus.DISABLED
@@ -245,6 +248,7 @@ def test_only_active_assigned_devices_and_exact_payload(
                 "alert_id": str(alert.alert_id),
                 "patient_id": str(patient.patient_id),
                 "patient_display_name": "Test Patient",
+                "patient_photo_url": "",
                 "metric_type": "HEART_RATE",
                 "title": "Critical: High Heart Rate",
                 "body": "Test Patient • 151 BPM",
@@ -367,22 +371,31 @@ def test_rollback_and_savepoint_do_not_send(
     ],
 )
 def test_warning_qualification_and_critical_escalation_each_send_once(
-    db_session, patient, event_payload, transport,
-    metric, value, offsets, critical_value,
+    db_session,
+    patient,
+    event_payload,
+    transport,
+    metric,
+    value,
+    offsets,
+    critical_value,
 ):
     device(db_session, caregiver(db_session, patient), "synthetic")
 
     def ingest(reading, offset):
         create_health_event(
             db_session,
-            HealthEventCreate(**{
-                **event_payload,
-                "metric_type": metric,
-                "metric_unit": "bpm" if metric == "HEART_RATE" else "%",
-                "numeric_value": reading,
-                "external_event_id": str(uuid4()),
-                "recorded_at": event_payload["recorded_at"] + timedelta(seconds=offset),
-            }),
+            HealthEventCreate(
+                **{
+                    **event_payload,
+                    "metric_type": metric,
+                    "metric_unit": "bpm" if metric == "HEART_RATE" else "%",
+                    "numeric_value": reading,
+                    "external_event_id": str(uuid4()),
+                    "recorded_at": event_payload["recorded_at"]
+                    + timedelta(seconds=offset),
+                }
+            ),
         )
 
     for offset in offsets[:-1]:
@@ -401,9 +414,7 @@ def test_warning_qualification_and_critical_escalation_each_send_once(
     assert escalation["android"] == {"priority": "HIGH"}
     assert escalation["data"]["metric_type"] == metric
     assert escalation["data"]["title"] == (
-        "Critical: High Heart Rate"
-        if metric == "HEART_RATE"
-        else "Critical: Low SpO₂"
+        "Critical: High Heart Rate" if metric == "HEART_RATE" else "Critical: Low SpO₂"
     )
     assert escalation["data"]["body"] == (
         f"Test Patient • {critical_value}{separator}{unit}"
@@ -414,19 +425,25 @@ def test_warning_qualification_and_critical_escalation_each_send_once(
 
 
 def test_acknowledged_warning_still_sends_critical_escalation(
-    db_session, patient, event_payload, transport,
+    db_session,
+    patient,
+    event_payload,
+    transport,
 ):
     device(db_session, caregiver(db_session, patient), "synthetic")
 
     def ingest(reading, offset):
         create_health_event(
             db_session,
-            HealthEventCreate(**{
-                **event_payload,
-                "numeric_value": reading,
-                "external_event_id": str(uuid4()),
-                "recorded_at": event_payload["recorded_at"] + timedelta(seconds=offset),
-            }),
+            HealthEventCreate(
+                **{
+                    **event_payload,
+                    "numeric_value": reading,
+                    "external_event_id": str(uuid4()),
+                    "recorded_at": event_payload["recorded_at"]
+                    + timedelta(seconds=offset),
+                }
+            ),
         )
 
     for offset in range(0, 121, 15):
@@ -451,20 +468,25 @@ def test_acknowledged_warning_still_sends_critical_escalation(
 
 
 def test_new_critical_occurrence_sends_again_while_prior_alert_is_unresolved(
-    db_session, patient, event_payload, transport,
+    db_session,
+    patient,
+    event_payload,
+    transport,
 ):
     device(db_session, caregiver(db_session, patient), "synthetic")
 
     def ingest(reading, offset):
         return create_health_event(
             db_session,
-            HealthEventCreate(**{
-                **event_payload,
-                "numeric_value": reading,
-                "external_event_id": str(uuid4()),
-                "recorded_at": event_payload["recorded_at"]
-                + timedelta(seconds=offset),
-            }),
+            HealthEventCreate(
+                **{
+                    **event_payload,
+                    "numeric_value": reading,
+                    "external_event_id": str(uuid4()),
+                    "recorded_at": event_payload["recorded_at"]
+                    + timedelta(seconds=offset),
+                }
+            ),
         )
 
     ingest("151", 0)
@@ -488,7 +510,10 @@ def test_new_critical_occurrence_sends_again_while_prior_alert_is_unresolved(
 
 
 def test_invalid_cleanup_preserves_concurrently_refreshed_registration(
-    db_session, patient, event_payload, transport,
+    db_session,
+    patient,
+    event_payload,
+    transport,
 ):
     actor = caregiver(db_session, patient)
     registered = device(db_session, actor, "synthetic")
@@ -502,10 +527,19 @@ def test_invalid_cleanup_preserves_concurrently_refreshed_registration(
                 .values(updated_at=utc_now(), last_seen_at=utc_now())
             )
             independent.commit()
-        return httpx.Response(404, json={"error": {"details": [{
-            "@type": "type.googleapis.com/google.firebase.fcm.v1.FcmError",
-            "errorCode": "UNREGISTERED",
-        }]}})
+        return httpx.Response(
+            404,
+            json={
+                "error": {
+                    "details": [
+                        {
+                            "@type": "type.googleapis.com/google.firebase.fcm.v1.FcmError",
+                            "errorCode": "UNREGISTERED",
+                        }
+                    ]
+                }
+            },
+        )
 
     transport.side_effect = refresh_during_send
     critical(db_session, event_payload)
@@ -513,7 +547,11 @@ def test_invalid_cleanup_preserves_concurrently_refreshed_registration(
 
 
 def test_alert_api_reads_and_actions_do_not_send(
-    api, db_session, patient, event_payload, transport,
+    api,
+    db_session,
+    patient,
+    event_payload,
+    transport,
 ):
     actor = caregiver(db_session, patient)
     device(db_session, actor, "synthetic")
@@ -523,13 +561,16 @@ def test_alert_api_reads_and_actions_do_not_send(
 
     async def read_and_acknowledge():
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=api), base_url="http://test",
+            transport=httpx.ASGITransport(app=api),
+            base_url="http://test",
             headers=headers(actor, patient),
         ) as client:
             assert (await client.get("/api/v1/alerts")).status_code == 200
             path = f"/api/v1/alerts/{alert.alert_id}"
             assert (await client.get(path)).status_code == 200
-            assert (await client.post(f"{path}/acknowledge", json={})).status_code == 200
+            assert (
+                await client.post(f"{path}/acknowledge", json={})
+            ).status_code == 200
 
     asyncio.run(read_and_acknowledge())
     assert transport.call_count == 1
