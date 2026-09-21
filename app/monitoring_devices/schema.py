@@ -30,6 +30,8 @@ class DeviceStatusUpsert(BaseModel):
         le=100,
     )
 
+    is_worn: bool | None = None
+
     connection_status: DeviceConnectionStatus
 
 
@@ -67,6 +69,8 @@ class MonitoringDeviceRead(BaseModel):
     device_model: str | None
 
     battery_percent: int | None
+    is_worn: bool | None
+    not_worn_since: datetime | None
 
     connection_status: DeviceConnectionStatus
 
@@ -91,6 +95,8 @@ class DeviceStatusResponse(BaseModel):
     device_model: str | None
 
     battery_percent: int | None
+    is_worn: bool | None
+    not_worn_since: datetime | None
 
     connection_status: DeviceConnectionStatus
 

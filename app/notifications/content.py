@@ -15,6 +15,28 @@ def notification_content(display: dict) -> tuple[str, str]:
         title = f"{severity.title()}: {alert_title}"
 
     name = display.get("patient_display_name")
+    condition_key = display.get("condition_key")
+    condition_value = getattr(
+        condition_key,
+        "value",
+        condition_key,
+    )
+
+    if condition_value == "WATCH_NOT_WORN":
+        if name:
+            body = (
+                f"{name}'s smartwatch has been off wrist "
+                "for at least 3 minutes."
+            )
+        else:
+            body = (
+                "The patient's smartwatch has been off wrist "
+                "for at least 3 minutes."
+            )
+
+        return title, body
+
+
     value = display.get("reading_value")
     unit = display.get("reading_unit")
     if name and value is not None and unit:

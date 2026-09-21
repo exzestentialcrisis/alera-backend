@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     device_heartbeat_stale_seconds: int = 150
     device_liveness_check_seconds: int = 30
+    watch_not_worn_grace_seconds: int = 180
 
     inactivity_timezone: str = "Asia/Manila"
     inactivity_threshold_hours: int = 8

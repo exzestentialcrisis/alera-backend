@@ -15,6 +15,7 @@ from app.notifications.events import queue_alert_notification
 DEVICE_ALERT_CONDITIONS = {
     ConditionKey.PHONE_DISCONNECTED,
     ConditionKey.WATCH_DISCONNECTED,
+    ConditionKey.WATCH_NOT_WORN,
     ConditionKey.PHONE_BATTERY_LOW,
     ConditionKey.WATCH_BATTERY_LOW,
 }
@@ -39,7 +40,7 @@ def _find_unresolved_device_alert(
             ),
         )
         .with_for_update()
-    )
+     )
 
 
 def set_device_alert_condition(

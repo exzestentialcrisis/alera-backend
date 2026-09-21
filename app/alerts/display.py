@@ -49,6 +49,11 @@ ALERT_DISPLAY_MAPPINGS: dict[ConditionKey, AlertDisplayMapping] = {
     MetricType.INACTIVITY,
     "hr",
     ),
+    ConditionKey.WATCH_NOT_WORN: AlertDisplayMapping(
+    "Smartwatch Not Worn",
+    MetricType.CONNECTION_STATUS,
+    "",
+    ),
 }
 
 # Future condition support belongs here. In particular, activity conditions can

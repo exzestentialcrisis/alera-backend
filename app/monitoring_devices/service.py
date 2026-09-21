@@ -116,6 +116,31 @@ def _mark_watch_unknown_if_phone_disconnected(
     watch.status_changed_at = now
     watch.updated_at = now
 
+def _apply_watch_wear_status(
+    device: MonitoringDevice,
+    payload: DeviceStatusUpsert,
+) -> None:
+    if (
+        device.device_type
+        is not MonitoringDeviceType.WATCH
+    ):
+        return
+
+    if "is_worn" not in payload.model_fields_set:
+        return
+
+    device.is_worn = payload.is_worn
+
+    if payload.is_worn is False:
+        if device.not_worn_since is None:
+            device.not_worn_since = payload.reported_at
+
+        return
+
+    # true or unknown breaks the continuous
+    # "not worn" period.
+    device.not_worn_since = None
+
 def _apply_update(
     db: Session,
     device: MonitoringDevice,
@@ -139,6 +164,8 @@ def _apply_update(
     if "battery_percent" in payload.model_fields_set:
         device.battery_percent = payload.battery_percent
 
+    _apply_watch_wear_status(device, payload,)   
+
     device.connection_status = payload.connection_status
     device.reported_at = payload.reported_at
     device.last_seen_at = utc_now()
@@ -148,7 +175,6 @@ def _apply_update(
 
 
     return True
-
 
 def upsert_device_status(
     db: Session,
@@ -182,6 +208,10 @@ def upsert_device_status(
                 status_changed_at=payload.reported_at,
                 created_at=now,
                 updated_at=now,
+            )
+            _apply_watch_wear_status(
+                device,
+                payload,
             )
 
             db.add(device)
@@ -301,4 +331,17 @@ def _sync_device_alerts(
             patient_id=device.patient_id,
             condition_key=battery_condition,
             active=device.battery_percent < 20,
+        )
+
+    # Wear-status recovery is immediate.
+    # Activation is handled by the liveness loop after the grace period.
+    if (
+        device.device_type is MonitoringDeviceType.WATCH
+        and device.is_worn is not False
+        ):
+        set_device_alert_condition(
+            db,
+            patient_id=device.patient_id,
+            condition_key=ConditionKey.WATCH_NOT_WORN,
+            active=False,
         )

@@ -17,6 +17,7 @@ def check_device_liveness(
     db: Session,
     *,
     stale_after: timedelta,
+    watch_not_worn_grace: timedelta,
 ) -> None:
     now = utc_now()
     cutoff = now - stale_after
@@ -137,6 +138,58 @@ def check_device_liveness(
             patient_id=watch.patient_id,
             condition_key=ConditionKey.WATCH_DISCONNECTED,
             active=True,
+        )
+
+ # 3. Watch wear-status lifecycle.
+    for watch in watches_by_patient.values():
+        phone = phones_by_patient.get(
+            watch.patient_id
+        )
+
+        # Wear status is only trustworthy while both
+        # the phone and watch are currently reachable.
+        watch_is_observable = (
+            watch.connection_status
+            is DeviceConnectionStatus.CONNECTED
+            and watch.last_seen_at > cutoff
+            and phone is not None
+            and phone.connection_status
+            is DeviceConnectionStatus.CONNECTED
+            and phone.last_seen_at > cutoff
+        )
+
+        if not watch_is_observable:
+            set_device_alert_condition(
+                db,
+                patient_id=watch.patient_id,
+                condition_key=ConditionKey.WATCH_NOT_WORN,
+                active=False,
+            )
+            continue
+
+        # Worn / unknown / no active not-worn period.
+        if (
+            watch.is_worn is not False
+            or watch.not_worn_since is None
+        ):
+            set_device_alert_condition(
+                db,
+                patient_id=watch.patient_id,
+                condition_key=ConditionKey.WATCH_NOT_WORN,
+                active=False,
+            )
+            continue
+
+        grace_elapsed = (
+            now - watch.not_worn_since
+            >= watch_not_worn_grace
+        )
+
+        set_device_alert_condition(
+            db,
+            patient_id=watch.patient_id,
+            condition_key=ConditionKey.WATCH_NOT_WORN,
+            active=grace_elapsed,
         )
 
     db.commit()

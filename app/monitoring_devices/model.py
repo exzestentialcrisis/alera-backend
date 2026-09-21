@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -80,6 +81,16 @@ class MonitoringDevice(Base):
 
     battery_percent: Mapped[int | None] = mapped_column(
         SmallInteger,
+        nullable=True,
+    )
+
+    is_worn: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+    )
+
+    not_worn_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
         nullable=True,
     )
 

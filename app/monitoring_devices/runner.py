@@ -28,6 +28,9 @@ async def device_liveness_loop(
                         stale_after=timedelta(
                             seconds=settings.device_heartbeat_stale_seconds
                         ),
+                        watch_not_worn_grace=timedelta(
+                            seconds=settings.watch_not_worn_grace_seconds
+                        ),
                     )
                 except Exception:
                     db.rollback()
