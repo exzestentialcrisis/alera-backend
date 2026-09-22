@@ -28,6 +28,7 @@ class DeviceConnectionStatus(str, enum.Enum):
     CONNECTED = "CONNECTED"
     DISCONNECTED = "DISCONNECTED"
     UNKNOWN = "UNKNOWN"
+    LOGGED_OUT = "LOGGED_OUT"
 
 class MonitoringDevice(Base):
     __tablename__ = "monitoring_devices"
