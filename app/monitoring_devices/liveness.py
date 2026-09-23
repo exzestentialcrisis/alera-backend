@@ -40,6 +40,52 @@ def check_device_liveness(
 
     # 1. Phones are authoritative for their own backend reachability
     for phone in phones_by_patient.values():
+
+        #LOGGED_OUT is an intentional, sticky state.
+        #Liveness checks must never overwrite it with DISCONNECTED.
+        if (
+            phone.connection_status
+            is DeviceConnectionStatus.LOGGED_OUT
+        ):
+            # A logged-out phone must not have a phone-disconnect alert.
+            set_device_alert_condition(
+                db,
+                patient_id=phone.patient_id,
+                condition_key=ConditionKey.PHONE_DISCONNECTED,
+                active=False,
+            )
+
+            # While the patient is logged out, the backend cannot
+            # meaningfully determine the watch's connection state.
+            watch = watches_by_patient.get(phone.patient_id)
+
+            if watch is not None:
+                if (
+                    watch.connection_status
+                    is not DeviceConnectionStatus.UNKNOWN
+                ):
+                    watch.connection_status = (
+                        DeviceConnectionStatus.UNKNOWN
+                    )
+                    watch.status_changed_at = now
+                    watch.updated_at = now
+
+                set_device_alert_condition(
+                    db,
+                    patient_id=watch.patient_id,
+                    condition_key=ConditionKey.WATCH_DISCONNECTED,
+                    active=False,
+                )
+
+                set_device_alert_condition(
+                    db,
+                    patient_id=watch.patient_id,
+                    condition_key=ConditionKey.WATCH_NOT_WORN,
+                    active=False,
+                )
+
+            continue
+
         if phone.last_seen_at > cutoff:
             continue
 

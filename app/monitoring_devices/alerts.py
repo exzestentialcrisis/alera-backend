@@ -18,6 +18,7 @@ DEVICE_ALERT_CONDITIONS = {
     ConditionKey.WATCH_NOT_WORN,
     ConditionKey.PHONE_BATTERY_LOW,
     ConditionKey.WATCH_BATTERY_LOW,
+    ConditionKey.PATIENT_LOGGED_OUT,
 }
 
 

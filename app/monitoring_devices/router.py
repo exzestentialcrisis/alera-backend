@@ -7,11 +7,27 @@ from app.monitoring_devices.schema import (
     DeviceStatusResponse,
     DeviceStatusUpsert,
 )
+
 from app.monitoring_devices.service import (
     DeviceStatusAccessError,
     DeviceStatusConflictError,
+    logout_patient_phone,
     upsert_device_status,
 )
+
+from app.monitoring_devices.schema import (
+    DeviceStatusResponse,
+    DeviceStatusUpsert,
+    PatientLogoutResponse,
+)
+
+from app.monitoring_devices.service import (
+    DeviceStatusAccessError,
+    DeviceStatusConflictError,
+    logout_patient_phone,
+    upsert_device_status,
+)
+
 from app.users.model import User
 
 
@@ -65,5 +81,33 @@ def update_device_status(
     except DeviceStatusConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+@router.post(
+    "/logout",
+    response_model=PatientLogoutResponse,
+    status_code=status.HTTP_200_OK,
+)
+def logout_patient_device(
+    actor: User = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> PatientLogoutResponse:
+    try:
+        phone = logout_patient_phone(
+            db,
+            actor,
+        )
+
+        return PatientLogoutResponse(
+            patient_id=phone.patient_id,
+            device_id=phone.device_id,
+            connection_status=phone.connection_status,
+            status_changed_at=phone.status_changed_at,
+        )
+
+    except DeviceStatusAccessError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc

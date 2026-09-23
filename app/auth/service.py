@@ -16,10 +16,17 @@ from app.household_access.security import (
     normalize_access_code,
     verify_access_code,
 )
+from app.monitoring_devices.model import (
+    DeviceConnectionStatus,
+    MonitoringDevice,
+    MonitoringDeviceType,
+)
 from app.households.codes import normalize_household_code
 from app.households.model import Household, HouseholdStatus
 from app.patients.model import ElderlyPatient
 from app.users.model import AccountStatus, User, UserRole
+from app.monitoring_devices.alerts import set_device_alert_condition
+from app.event_evaluations.model import ConditionKey
 
 
 def authenticate_caregiver(
@@ -150,6 +157,46 @@ def authenticate_patient(
         ).scalar_one_or_none()
         if consumed is None:
             raise failure
+        phone = db.scalar(
+            select(MonitoringDevice)
+            .where(
+                MonitoringDevice.patient_id == patient.patient_id,
+                MonitoringDevice.device_type
+                == MonitoringDeviceType.PHONE,
+            )
+            .with_for_update()
+        )
+
+        if phone is not None:
+            now = utc_now()
+
+            if (
+                phone.connection_status
+                is not DeviceConnectionStatus.CONNECTED
+            ):
+                phone.connection_status = (
+                    DeviceConnectionStatus.CONNECTED
+                )
+                phone.status_changed_at = now
+
+            phone.reported_at = now
+            phone.last_seen_at = now
+            phone.updated_at = now
+
+            set_device_alert_condition(
+                db,
+                patient_id=patient.patient_id,
+                condition_key=ConditionKey.PATIENT_LOGGED_OUT,
+                active=False,
+            )
+
+            set_device_alert_condition(
+                db,
+                patient_id=patient.patient_id,
+                condition_key=ConditionKey.PHONE_DISCONNECTED,
+                active=False,
+            )
+
         token, expires_at = create_access_token(
             user_id=user.user_id,
             household_id=household.household_id,

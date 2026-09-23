@@ -54,6 +54,11 @@ ALERT_DISPLAY_MAPPINGS: dict[ConditionKey, AlertDisplayMapping] = {
     MetricType.CONNECTION_STATUS,
     "",
     ),
+    ConditionKey.PATIENT_LOGGED_OUT: AlertDisplayMapping(
+    "Patient Logged Out",
+    MetricType.CONNECTION_STATUS,
+    "",
+    ),
 }
 
 # Future condition support belongs here. In particular, activity conditions can

@@ -8,7 +8,6 @@ from app.monitoring_devices.model import (
     MonitoringDeviceType,
 )
 
-
 class DeviceStatusUpsert(BaseModel):
     patient_id: UUID
 
@@ -112,3 +111,9 @@ class DeviceStatusResponse(BaseModel):
     model_config = ConfigDict(
         from_attributes=True,
     )
+
+class PatientLogoutResponse(BaseModel):
+    patient_id: UUID
+    device_id: UUID
+    connection_status: DeviceConnectionStatus
+    status_changed_at: datetime    
