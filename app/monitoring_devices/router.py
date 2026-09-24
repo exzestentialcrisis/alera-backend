@@ -21,13 +21,6 @@ from app.monitoring_devices.schema import (
     PatientLogoutResponse,
 )
 
-from app.monitoring_devices.service import (
-    DeviceStatusAccessError,
-    DeviceStatusConflictError,
-    logout_patient_phone,
-    upsert_device_status,
-)
-
 from app.users.model import User
 
 

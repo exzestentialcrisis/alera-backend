@@ -1,7 +1,13 @@
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from app.monitoring_devices.model import (
     DeviceConnectionStatus,
@@ -33,8 +39,6 @@ class DeviceStatusUpsert(BaseModel):
 
     connection_status: DeviceConnectionStatus
 
-
-
     reported_at: datetime
 
     model_config = ConfigDict(
@@ -57,6 +61,15 @@ class DeviceStatusUpsert(BaseModel):
             )
 
         return value
+    
+    @model_validator(mode="after")
+    def reject_explicit_logged_out_status(self):
+        if self.connection_status is DeviceConnectionStatus.LOGGED_OUT:
+            raise ValueError(
+                "LOGGED_OUT may only be set through the patient logout endpoint."
+            )
+    
+        return self
 
 class MonitoringDeviceRead(BaseModel):
     device_id: UUID
