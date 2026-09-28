@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -20,6 +20,10 @@ from app.activity.schema import (
     ActivityDailyDataInput,
     ActivityDataUpsert,
     ActivitySessionInput,
+    ActivityTrendPoint,
+    ActivityTrendRange,
+    ActivityTrendResponse,
+    ActivityTrendSummary,
 )
 from app.core.time import utc_now
 from app.patients.model import ElderlyPatient
@@ -432,3 +436,77 @@ def upsert_activity_data(
     except Exception:
         db.rollback()
         raise
+
+
+def get_activity_trend(
+    db: Session,
+    patient: ElderlyPatient,
+    trend_range: ActivityTrendRange,
+) -> ActivityTrendResponse:
+    """Return stored daily step totals for a selected period."""
+
+    period_days = (
+        7
+        if trend_range is ActivityTrendRange.WEEK
+        else 30
+    )
+
+    to_date = utc_now().date()
+    from_date = to_date - timedelta(days=period_days - 1)
+
+    rows = db.execute(
+        select(
+            ActivityData.activity_date,
+            ActivityDailyData.total_steps,
+        )
+        .join(
+            ActivityDailyData,
+            ActivityDailyData.activity_data_id
+            == ActivityData.activity_data_id,
+        )
+        .where(
+            ActivityData.patient_id == patient.patient_id,
+            ActivityData.activity_type == ActivityType.STEPS,
+            ActivityData.activity_date >= from_date,
+            ActivityData.activity_date <= to_date,
+            ActivityDailyData.total_steps.is_not(None),
+        )
+        .order_by(ActivityData.activity_date)
+    ).all()
+
+    points = [
+        ActivityTrendPoint(
+            activity_date=activity_date,
+            total_steps=int(total_steps),
+        )
+        for activity_date, total_steps in rows
+    ]
+
+    summary = ActivityTrendSummary()
+
+    if points:
+        summary = ActivityTrendSummary(
+            average_steps_per_day=round(
+                sum(point.total_steps for point in points)
+                / len(points),
+                2,
+            ),
+            highest_day=max(
+                points,
+                key=lambda point: point.total_steps,
+            ),
+            lowest_day=min(
+                points,
+                key=lambda point: point.total_steps,
+            ),
+            days_with_data=len(points),
+        )
+
+    return ActivityTrendResponse(
+        patient_id=patient.patient_id,
+        range=trend_range,
+        from_date=from_date,
+        to_date=to_date,
+        summary=summary,
+        points=points,
+    )

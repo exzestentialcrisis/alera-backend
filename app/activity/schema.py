@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
+from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -100,6 +101,34 @@ class ActivityDataUpsert(BaseModel):
                     )
 
         return self
+
+
+class ActivityTrendRange(str, Enum):
+    WEEK = "7d"
+    MONTH = "30d"
+
+
+class ActivityTrendPoint(BaseModel):
+    activity_date: date
+    total_steps: int
+
+
+class ActivityTrendSummary(BaseModel):
+    average_steps_per_day: float | None = None
+    highest_day: ActivityTrendPoint | None = None
+    lowest_day: ActivityTrendPoint | None = None
+    days_with_data: int = 0
+
+
+class ActivityTrendResponse(BaseModel):
+    patient_id: UUID
+    range: ActivityTrendRange
+
+    from_date: date
+    to_date: date
+
+    summary: ActivityTrendSummary
+    points: list[ActivityTrendPoint]
 
 
 class ActivitySessionRead(BaseModel):
