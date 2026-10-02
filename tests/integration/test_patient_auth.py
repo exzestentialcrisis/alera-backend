@@ -37,6 +37,8 @@ def test_patient_enrollment_and_replay(api_app, db_session):
     assert response.status_code == 200
     body = response.json()
     assert body["actor"]["role"] == "ELDERLY_PATIENT"
+    assert body["actor"]["patient_id"] == str(patient.patient_id)
+    assert body["actor"]["user_id"] == str(user.user_id)
     assert body["actor"]["full_name"] == "Alera Test Patient"
     assert body["token_type"] == "bearer"
     assert set(body) == {"access_token", "token_type", "expires_at", "actor"}

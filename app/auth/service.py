@@ -206,7 +206,10 @@ def authenticate_patient(
         return {
             "access_token": token, "token_type": "bearer", "expires_at": expires_at,
             "actor": {
-                "user_id": user.user_id, "full_name": user.full_name, "role": user.role,
+                "user_id": user.user_id, 
+                "patient_id": patient.patient_id,
+                "full_name": user.full_name, 
+                "role": user.role,
                 "household_id": household.household_id,
                 "household_name": household.household_name,
                 "household_code": household.household_code,

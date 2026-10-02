@@ -36,6 +36,7 @@ class ActorProfile(BaseModel):
     household_id: UUID
     household_name: str
     household_code: str
+    patient_id: UUID | None = None
 
 
 class CaregiverLoginResponse(BaseModel):
