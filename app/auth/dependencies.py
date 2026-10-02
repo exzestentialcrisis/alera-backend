@@ -59,3 +59,28 @@ async def get_current_caregiver(actor: User = Depends(get_current_actor)) -> Use
     if actor.role not in {UserRole.CAREGIVER, UserRole.CARE_ADMIN}:
         raise HTTPException(status_code=403, detail="Caregiver access required.")
     return actor
+
+async def get_current_patient(
+    actor: User = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> ElderlyPatient:
+    if actor.role is not UserRole.ELDERLY_PATIENT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Patient access required.",
+        )
+
+    patient = db.scalar(
+        select(ElderlyPatient).where(
+            ElderlyPatient.user_id == actor.user_id,
+            ElderlyPatient.archived_at.is_(None),
+        )
+    )
+
+    if patient is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Patient access unavailable.",
+        )
+
+    return patient
