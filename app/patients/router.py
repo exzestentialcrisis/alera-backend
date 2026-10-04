@@ -13,8 +13,13 @@ from fastapi import (
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
-from app.activity.schema import ActivityTrendRange, ActivityTrendResponse
-from app.activity.service import get_activity_trend
+from app.activity.schema import (
+    ActivityTrendRange,
+    ActivityTrendResponse,
+    SleepTrendRange,
+    SleepTrendResponse,
+)
+from app.activity.service import get_activity_trend, get_sleep_trend
 from app.monitoring_devices.schema import MonitoringDeviceRead
 from app.monitoring_devices.service import list_patient_monitoring_devices
 
@@ -165,6 +170,45 @@ def read_activity_trends(
         )
 
         return get_activity_trend(
+            db,
+            patient_row.patient,
+            trend_range=trend_range,
+        )
+
+    except PatientNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get(
+    "/{patient_id}/sleep-trends",
+    response_model=SleepTrendResponse,
+    summary="Get patient sleep trends",
+    responses={
+        404: {
+            "description": "Patient not found in the actor's scope.",
+        },
+    },
+)
+def read_sleep_trends(
+    patient_id: UUID,
+    trend_range: Annotated[
+        SleepTrendRange,
+        Query(alias="range"),
+    ] = SleepTrendRange.WEEK,
+    actor: User = Depends(get_current_caregiver),
+    db: Session = Depends(get_db),
+):
+    try:
+        patient_row = get_patient(
+            db,
+            actor,
+            patient_id,
+        )
+
+        return get_sleep_trend(
             db,
             patient_row.patient,
             trend_range=trend_range,

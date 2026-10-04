@@ -131,6 +131,35 @@ class ActivityTrendResponse(BaseModel):
     points: list[ActivityTrendPoint]
 
 
+class SleepTrendRange(str, Enum):
+    WEEK = "7d"
+    MONTH = "30d"
+
+
+class SleepTrendPoint(BaseModel):
+    activity_date: date
+    duration_seconds: int
+
+
+class SleepTrendSummary(BaseModel):
+    latest_night: SleepTrendPoint | None = None
+    average_duration_seconds: float | None = None
+    longest_night: SleepTrendPoint | None = None
+    shortest_night: SleepTrendPoint | None = None
+    nights_with_data: int = 0
+
+
+class SleepTrendResponse(BaseModel):
+    patient_id: UUID
+    range: SleepTrendRange
+
+    from_date: date
+    to_date: date
+
+    summary: SleepTrendSummary
+    points: list[SleepTrendPoint]
+
+
 class ActivitySessionRead(BaseModel):
     activity_session_id: UUID
     external_session_id: str | None
