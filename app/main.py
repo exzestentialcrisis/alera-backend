@@ -9,6 +9,7 @@ from app.core.config import Settings, get_settings
 from app.patients.router import router as patient_router
 from app.devices.router import router as devices_router
 from app.health_events.router import router as health_event_router
+from app.help_requests.router import router as help_request_router
 from app.household_access.router import router as household_access_router
 from app.monitoring_devices.router import router as monitoring_device_router
 from app.reminders.router import router as reminder_router
@@ -58,6 +59,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.settings = app_settings
     application.dependency_overrides[get_settings] = lambda: app_settings
     application.include_router(health_event_router)
+    application.include_router(help_request_router)
     application.include_router(alert_router)
     application.include_router(household_access_router)
     application.include_router(auth_router)
