@@ -35,4 +35,12 @@ class HelpRequestRead(BaseModel):
     resolved_by_user_id: UUID | None
     resolved_at: datetime | None
     updated_at: datetime
+    patient_display_name: str | None = None
     idempotent: bool = False
+
+
+class HelpRequestListResponse(BaseModel):
+    items: list[HelpRequestRead]
+    total: int
+    limit: int
+    offset: int
