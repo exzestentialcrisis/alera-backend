@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import httpx
@@ -13,7 +14,6 @@ from app.household_access.model import CaregiverPatientAssignment
 from app.households.model import Household
 from app.main import create_app
 from app.users.model import User, UserRole
-
 
 pytestmark = pytest.mark.integration
 SECRET = "help-request-test-secret-that-is-long-enough"
@@ -583,3 +583,136 @@ def test_caregiver_can_resolve_pending_request_directly(
     )
     assert active.status_code == 200
     assert active.json() is None
+def test_help_request_push_intents_commit_once(
+    help_request_app,
+    db_session,
+    patient,
+    monkeypatch,
+):
+    delivered = Mock()
+    monkeypatch.setattr(
+        "app.help_requests.notification_service.deliver_help_request_notifications",
+        delivered,
+    )
+
+    household, patient_user, _owner = patient_identity(
+        db_session,
+        patient,
+    )
+    action_id = uuid4()
+    request_body = payload(action_id, "Please call me")
+
+    created = request(
+        help_request_app,
+        "POST",
+        "/api/v1/help-requests",
+        user=patient_user,
+        household_id=household.household_id,
+        json=request_body,
+    )
+    assert created.status_code == 201
+
+    request_id = UUID(created.json()["help_request_id"])
+    delivered.assert_called_once()
+    assert delivered.call_args.args[1] == {
+        (request_id, "CREATED"),
+    }
+
+    delivered.reset_mock()
+    replay = request(
+        help_request_app,
+        "POST",
+        "/api/v1/help-requests",
+        user=patient_user,
+        household_id=household.household_id,
+        json=request_body,
+    )
+    assert replay.status_code == 201
+    assert replay.json()["idempotent"] is True
+    delivered.assert_not_called()
+
+    _household, assigned, _unassigned = setup_caregivers(
+        db_session,
+        patient,
+    )
+    delivered.reset_mock()
+
+    acknowledged = request(
+        help_request_app,
+        "POST",
+        f"/api/v1/help-requests/{request_id}/acknowledge",
+        user=assigned,
+        household_id=household.household_id,
+    )
+    assert acknowledged.status_code == 200
+    delivered.assert_called_once()
+    assert delivered.call_args.args[1] == {
+        (request_id, "ACKNOWLEDGED"),
+    }
+
+    delivered.reset_mock()
+    acknowledged_replay = request(
+        help_request_app,
+        "POST",
+        f"/api/v1/help-requests/{request_id}/acknowledge",
+        user=assigned,
+        household_id=household.household_id,
+    )
+    assert acknowledged_replay.status_code == 200
+    assert acknowledged_replay.json()["idempotent"] is True
+    delivered.assert_not_called()
+
+    resolved = request(
+        help_request_app,
+        "POST",
+        f"/api/v1/help-requests/{request_id}/resolve",
+        user=assigned,
+        household_id=household.household_id,
+    )
+    assert resolved.status_code == 200
+    delivered.assert_called_once()
+    assert delivered.call_args.args[1] == {
+        (request_id, "RESOLVED"),
+    }
+
+    delivered.reset_mock()
+    resolved_replay = request(
+        help_request_app,
+        "POST",
+        f"/api/v1/help-requests/{request_id}/resolve",
+        user=assigned,
+        household_id=household.household_id,
+    )
+    assert resolved_replay.status_code == 200
+    assert resolved_replay.json()["idempotent"] is True
+    delivered.assert_not_called()
+
+
+def test_help_request_rollback_discards_push_intent(
+    db_session,
+    patient,
+    monkeypatch,
+):
+    from app.help_requests.service import create_help_request
+
+    delivered = Mock()
+    monkeypatch.setattr(
+        "app.help_requests.notification_service.deliver_help_request_notifications",
+        delivered,
+    )
+
+    created, idempotent = create_help_request(
+        db_session,
+        patient=patient,
+        client_action_id=uuid4(),
+        message="Do not deliver before commit",
+    )
+    created_id = created.help_request_id
+
+    assert idempotent is False
+    delivered.assert_not_called()
+
+    db_session.rollback()
+
+    delivered.assert_not_called()
+    assert db_session.get(HelpRequest, created_id) is None

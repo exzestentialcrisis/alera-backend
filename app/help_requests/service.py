@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.alerts.access import accessible_patient_ids
 from app.core.time import utc_now
+from app.help_requests.events import queue_help_request_notification
 from app.help_requests.model import HelpRequest, HelpRequestStatus
 from app.patients.model import ElderlyPatient
 from app.users.model import User
@@ -147,6 +148,11 @@ def create_help_request(
             )
         raise
 
+    queue_help_request_notification(
+        db,
+        request.help_request_id,
+        "CREATED",
+    )
     return request, False
 
 
@@ -304,6 +310,11 @@ def acknowledge_help_request(
     request.acknowledged_by_user_id = actor.user_id
     request.acknowledged_at = utc_now()
     db.flush()
+    queue_help_request_notification(
+        db,
+        request.help_request_id,
+        "ACKNOWLEDGED",
+    )
     return request, False
 
 
@@ -326,4 +337,9 @@ def resolve_help_request(
     request.resolved_by_user_id = actor.user_id
     request.resolved_at = utc_now()
     db.flush()
+    queue_help_request_notification(
+        db,
+        request.help_request_id,
+        "RESOLVED",
+    )
     return request, False
