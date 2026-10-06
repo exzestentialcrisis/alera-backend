@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session
 from app.alerts.access import accessible_patient_ids
 from app.core.time import utc_now
 from app.help_requests.events import queue_help_request_notification
-from app.help_requests.model import HelpRequest, HelpRequestStatus
+from app.help_requests.model import (
+    HelpRequest,
+    HelpRequestNote,
+    HelpRequestStatus,
+)
 from app.patients.model import ElderlyPatient
 from app.users.model import User
 
@@ -343,3 +347,150 @@ def resolve_help_request(
         "RESOLVED",
     )
     return request, False
+
+def help_request_note_payload(
+    note: HelpRequestNote,
+    *,
+    author: User | None = None,
+    idempotent: bool = False,
+) -> dict:
+    return {
+        "help_request_note_id": note.help_request_note_id,
+        "help_request_id": note.help_request_id,
+        "author_user_id": note.author_user_id,
+        "client_action_id": note.client_action_id,
+        "note": note.note,
+        "created_at": note.created_at,
+        "author_display_name": author.full_name if author is not None else None,
+        "idempotent": idempotent,
+    }
+
+
+def list_help_request_notes(
+    db: Session,
+    *,
+    help_request_id: UUID,
+    actor: User,
+    limit: int,
+    offset: int,
+) -> tuple[list[tuple[HelpRequestNote, User | None]], int]:
+    get_help_request(
+        db,
+        help_request_id=help_request_id,
+        actor=actor,
+    )
+
+    filters = [HelpRequestNote.help_request_id == help_request_id]
+
+    total = (
+        db.scalar(
+            select(func.count(HelpRequestNote.help_request_note_id)).where(*filters)
+        )
+        or 0
+    )
+
+    notes = list(
+        db.scalars(
+            select(HelpRequestNote)
+            .where(*filters)
+            .order_by(
+                HelpRequestNote.created_at.asc(),
+                HelpRequestNote.help_request_note_id.asc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        ).all()
+    )
+
+    authors = {
+        author.user_id: author
+        for author in db.scalars(
+            select(User).where(
+                User.user_id.in_({note.author_user_id for note in notes})
+            )
+        ).all()
+    }
+
+    return [(note, authors.get(note.author_user_id)) for note in notes], total
+
+
+def _matching_note_replay(
+    note: HelpRequestNote,
+    *,
+    help_request_id: UUID,
+    actor: User,
+    value: str,
+) -> bool:
+    return (
+        note.help_request_id == help_request_id
+        and note.author_user_id == actor.user_id
+        and note.note == value
+    )
+
+
+def add_help_request_note(
+    db: Session,
+    *,
+    help_request_id: UUID,
+    actor: User,
+    client_action_id: UUID,
+    note: str,
+) -> tuple[HelpRequestNote, bool]:
+    get_help_request(
+        db,
+        help_request_id=help_request_id,
+        actor=actor,
+    )
+
+    existing = db.scalar(
+        select(HelpRequestNote).where(
+            HelpRequestNote.client_action_id == client_action_id
+        )
+    )
+    if existing is not None:
+        if not _matching_note_replay(
+            existing,
+            help_request_id=help_request_id,
+            actor=actor,
+            value=note,
+        ):
+            raise HelpRequestConflictError(
+                "client_action_id was already used for another note."
+            )
+        return existing, True
+
+    item = HelpRequestNote(
+        help_request_id=help_request_id,
+        author_user_id=actor.user_id,
+        client_action_id=client_action_id,
+        note=note,
+    )
+
+    savepoint = db.begin_nested()
+    try:
+        db.add(item)
+        db.flush()
+        savepoint.commit()
+    except IntegrityError:
+        savepoint.rollback()
+
+        existing = db.scalar(
+            select(HelpRequestNote).where(
+                HelpRequestNote.client_action_id == client_action_id
+            )
+        )
+        if existing is None:
+            raise
+
+        if not _matching_note_replay(
+            existing,
+            help_request_id=help_request_id,
+            actor=actor,
+            value=note,
+        ):
+            raise HelpRequestConflictError(
+                "client_action_id was already used for another note."
+            )
+        return existing, True
+
+    return item, False

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.auth.security import create_access_token
 from app.core.config import Settings
 from app.db.database import get_db
-from app.help_requests.model import HelpRequest
+from app.help_requests.model import HelpRequest, HelpRequestNote
 from app.household_access.model import CaregiverPatientAssignment
 from app.households.model import Household
 from app.main import create_app
@@ -716,3 +716,218 @@ def test_help_request_rollback_discards_push_intent(
 
     delivered.assert_not_called()
     assert db_session.get(HelpRequest, created_id) is None
+
+def test_caregiver_adds_and_lists_help_request_notes(
+    help_request_app,
+    db_session,
+    patient,
+):
+    created, household, _patient_user = create_patient_help_request(
+        help_request_app,
+        db_session,
+        patient,
+    )
+    _household, assigned, _unassigned = setup_caregivers(
+        db_session,
+        patient,
+    )
+    request_id = created["help_request_id"]
+    action_id = uuid4()
+    first_payload = {
+        "client_action_id": str(action_id),
+        "note": "  Called Nana. Her daughter is on the way.  ",
+    }
+
+    first = request(
+        help_request_app,
+        "POST",
+        f"/api/v1/help-requests/{request_id}/notes",
+        user=assigned,
+        household_id=household.household_id,
+        json=first_payload,
+    )
+
+    assert first.status_code == 201
+    first_body = first.json()
+    assert first_body["help_request_id"] == request_id
+    assert first_body["author_user_id"] == str(assigned.user_id)
+    assert first_body["author_display_name"] == assigned.full_name
+    assert first_body["client_action_id"] == str(action_id)
+    assert first_body["note"] == "Called Nana. Her daughter is on the way."
+    assert first_body["idempotent"] is False
+
+    replay = request(
+        help_request_app,
+        "POST",
+        f"/api/v1/help-requests/{request_id}/notes",
+        user=assigned,
+        household_id=household.household_id,
+        json=first_payload,
+    )
+
+    assert replay.status_code == 201
+    assert replay.json()["help_request_note_id"] == first_body["help_request_note_id"]
+    assert replay.json()["idempotent"] is True
+
+    changed_replay = request(
+        help_request_app,
+        "POST",
+        f"/api/v1/help-requests/{request_id}/notes",
+        user=assigned,
+        household_id=household.household_id,
+        json={
+            "client_action_id": str(action_id),
+            "note": "Changed meaning",
+        },
+    )
+    assert changed_replay.status_code == 409
+
+    resolved = request(
+        help_request_app,
+        "POST",
+        f"/api/v1/help-requests/{request_id}/resolve",
+        user=assigned,
+        household_id=household.household_id,
+    )
+    assert resolved.status_code == 200
+
+    second = request(
+        help_request_app,
+        "POST",
+        f"/api/v1/help-requests/{request_id}/notes",
+        user=assigned,
+        household_id=household.household_id,
+        json={
+            "client_action_id": str(uuid4()),
+            "note": "Follow-up completed after resolution.",
+        },
+    )
+    assert second.status_code == 201
+
+    listed = request(
+        help_request_app,
+        "GET",
+        f"/api/v1/help-requests/{request_id}/notes",
+        user=assigned,
+        household_id=household.household_id,
+    )
+
+    assert listed.status_code == 200
+    body = listed.json()
+    assert body["total"] == 2
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    assert [item["note"] for item in body["items"]] == [
+        "Called Nana. Her daughter is on the way.",
+        "Follow-up completed after resolution.",
+    ]
+
+    paged = request(
+        help_request_app,
+        "GET",
+        (f"/api/v1/help-requests/{request_id}/notes?limit=1&offset=1"),
+        user=assigned,
+        household_id=household.household_id,
+    )
+    assert paged.status_code == 200
+    assert paged.json()["total"] == 2
+    assert paged.json()["limit"] == 1
+    assert paged.json()["offset"] == 1
+    assert paged.json()["items"][0]["note"] == ("Follow-up completed after resolution.")
+
+    stored = db_session.scalars(
+        select(HelpRequestNote).where(
+            HelpRequestNote.help_request_id == UUID(request_id)
+        )
+    ).all()
+    assert len(stored) == 2
+
+
+def test_help_request_notes_enforce_access_and_validation(
+    help_request_app,
+    db_session,
+    patient,
+):
+    created, household, patient_user = create_patient_help_request(
+        help_request_app,
+        db_session,
+        patient,
+    )
+    _household, assigned, unassigned = setup_caregivers(
+        db_session,
+        patient,
+    )
+    request_id = created["help_request_id"]
+    path = f"/api/v1/help-requests/{request_id}/notes"
+
+    patient_create = request(
+        help_request_app,
+        "POST",
+        path,
+        user=patient_user,
+        household_id=household.household_id,
+        json={
+            "client_action_id": str(uuid4()),
+            "note": "Patients cannot create private caregiver notes.",
+        },
+    )
+    assert patient_create.status_code == 403
+
+    patient_list = request(
+        help_request_app,
+        "GET",
+        path,
+        user=patient_user,
+        household_id=household.household_id,
+    )
+    assert patient_list.status_code == 403
+
+    unassigned_create = request(
+        help_request_app,
+        "POST",
+        path,
+        user=unassigned,
+        household_id=household.household_id,
+        json={
+            "client_action_id": str(uuid4()),
+            "note": "This request must remain undiscoverable.",
+        },
+    )
+    assert unassigned_create.status_code == 404
+
+    unassigned_list = request(
+        help_request_app,
+        "GET",
+        path,
+        user=unassigned,
+        household_id=household.household_id,
+    )
+    assert unassigned_list.status_code == 404
+
+    blank = request(
+        help_request_app,
+        "POST",
+        path,
+        user=assigned,
+        household_id=household.household_id,
+        json={
+            "client_action_id": str(uuid4()),
+            "note": "   ",
+        },
+    )
+    assert blank.status_code == 422
+
+    oversized = request(
+        help_request_app,
+        "POST",
+        path,
+        user=assigned,
+        household_id=household.household_id,
+        json={
+            "client_action_id": str(uuid4()),
+            "note": "x" * 1001,
+        },
+    )
+    assert oversized.status_code == 422
+
+    assert db_session.scalar(select(HelpRequestNote)) is None

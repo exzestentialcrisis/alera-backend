@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, text
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -88,4 +88,48 @@ class HelpRequest(Base):
         nullable=False,
         default=utc_now,
         onupdate=utc_now,
+    )
+
+
+class HelpRequestNote(Base):
+    __tablename__ = "help_request_notes"
+    __table_args__ = (
+        Index(
+            "ix_help_request_notes_request_created",
+            "help_request_id",
+            "created_at",
+        ),
+    )
+
+    help_request_note_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    help_request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "help_requests.help_request_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    author_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id"),
+        nullable=False,
+    )
+    client_action_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        unique=True,
+    )
+    note: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
     )

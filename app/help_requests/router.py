@@ -10,6 +10,9 @@ from app.help_requests.model import HelpRequestStatus
 from app.help_requests.schema import (
     HelpRequestCreate,
     HelpRequestListResponse,
+    HelpRequestNoteCreate,
+    HelpRequestNoteListResponse,
+    HelpRequestNoteRead,
     HelpRequestRead,
 )
 from app.help_requests.service import (
@@ -18,15 +21,17 @@ from app.help_requests.service import (
     HelpRequestTransitionConflictError,
     acknowledge_help_request,
     active_help_request,
+    add_help_request_note,
     create_help_request,
     get_help_request,
+    help_request_note_payload,
     help_request_payload,
+    list_help_request_notes,
     list_help_requests,
     resolve_help_request,
 )
 from app.patients.model import ElderlyPatient
 from app.users.model import User
-
 
 router = APIRouter(
     prefix="/api/v1/help-requests",
@@ -230,4 +235,84 @@ def resolve(
         action=resolve_help_request,
         help_request_id=help_request_id,
         actor=actor,
+    )
+
+
+@router.get(
+    "/{help_request_id}/notes",
+    response_model=HelpRequestNoteListResponse,
+)
+def read_help_request_notes(
+    help_request_id: UUID,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    actor: User = Depends(get_current_caregiver),
+    db: Session = Depends(get_db),
+):
+    try:
+        notes, total = list_help_request_notes(
+            db,
+            help_request_id=help_request_id,
+            actor=actor,
+            limit=limit,
+            offset=offset,
+        )
+    except HelpRequestNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "items": [
+            help_request_note_payload(note, author=author) for note, author in notes
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.post(
+    "/{help_request_id}/notes",
+    response_model=HelpRequestNoteRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_help_request_note(
+    help_request_id: UUID,
+    payload: HelpRequestNoteCreate,
+    actor: User = Depends(get_current_caregiver),
+    db: Session = Depends(get_db),
+):
+    try:
+        note, idempotent = add_help_request_note(
+            db,
+            help_request_id=help_request_id,
+            actor=actor,
+            client_action_id=payload.client_action_id,
+            note=payload.note,
+        )
+        db.commit()
+        db.refresh(note)
+        author = db.get(User, note.author_user_id)
+    except HelpRequestNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except HelpRequestConflictError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    return help_request_note_payload(
+        note,
+        author=author,
+        idempotent=idempotent,
     )

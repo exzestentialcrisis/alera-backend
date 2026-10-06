@@ -44,3 +44,36 @@ class HelpRequestListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class HelpRequestNoteCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_action_id: UUID
+    note: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("note must not be blank")
+        return value
+
+
+class HelpRequestNoteRead(BaseModel):
+    help_request_note_id: UUID
+    help_request_id: UUID
+    author_user_id: UUID
+    client_action_id: UUID
+    note: str
+    created_at: datetime
+    author_display_name: str | None = None
+    idempotent: bool = False
+
+
+class HelpRequestNoteListResponse(BaseModel):
+    items: list[HelpRequestNoteRead]
+    total: int
+    limit: int
+    offset: int
