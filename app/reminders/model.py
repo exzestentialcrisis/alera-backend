@@ -22,7 +22,9 @@ from app.db.base import Base
 from app.reminders.enums import (
     ReminderActionType,
     ReminderCategory,
+    ReminderEventActorRole,
     ReminderNotificationChannel,
+    ReminderOccurrenceEventType,
     ReminderOccurrenceStatus,
     ReminderPriority,
     ReminderTemplateStatus,
@@ -166,6 +168,71 @@ class ReminderOccurrence(Base):
         default=utc_now,
         onupdate=utc_now,
         server_default="now()",
+    )
+
+
+class ReminderOccurrenceEvent(Base):
+    __tablename__ = "reminder_occurrence_events"
+    __table_args__ = (
+        Index(
+            "idx_reminder_occurrence_events_occurrence_time",
+            "reminder_occurrence_id",
+            "occurred_at",
+            "event_id",
+        ),
+        Index(
+            "idx_reminder_occurrence_events_actor",
+            "actor_user_id",
+        ),
+    )
+
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    reminder_occurrence_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "reminder_occurrences.reminder_occurrence_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    event_type: Mapped[ReminderOccurrenceEventType] = mapped_column(
+        ENUM(
+            ReminderOccurrenceEventType,
+            name="reminder_occurrence_event_type_enum",
+            create_type=False,
+        ),
+        nullable=False,
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default="now()",
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    actor_role: Mapped[ReminderEventActorRole] = mapped_column(
+        ENUM(
+            ReminderEventActorRole,
+            name="reminder_event_actor_role_enum",
+            create_type=False,
+        ),
+        nullable=False,
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    event_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata",
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default="{}",
     )
 
 

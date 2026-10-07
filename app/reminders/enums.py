@@ -49,6 +49,23 @@ class ReminderActionType(str, enum.Enum):
     FOLLOW_UP = "FOLLOW_UP"
 
 
+class ReminderOccurrenceEventType(str, enum.Enum):
+    CREATED = "CREATED"
+    NOTIFICATION_SENT = "NOTIFICATION_SENT"
+    SNOOZED = "SNOOZED"
+    COMPLETED = "COMPLETED"
+    COMPLETED_LATE = "COMPLETED_LATE"
+    COMPLETED_ON_BEHALF = "COMPLETED_ON_BEHALF"
+    CANCELED = "CANCELED"
+    MARKED_MISSED = "MARKED_MISSED"
+
+
+class ReminderEventActorRole(str, enum.Enum):
+    CAREGIVER = "CAREGIVER"
+    PATIENT = "PATIENT"
+    SYSTEM = "SYSTEM"
+
+
 class ReminderNotificationChannel(str, enum.Enum):
     IN_APP = "IN_APP"
     PUSH = "PUSH"
