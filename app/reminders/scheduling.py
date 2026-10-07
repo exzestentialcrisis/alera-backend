@@ -7,11 +7,13 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.reminders.enums import (
+    ReminderOccurrenceEventType,
     ReminderOccurrenceStatus,
     ReminderTemplateStatus,
 )
+from app.reminders.event_service import record_reminder_occurrence_event
 from app.reminders.model import ReminderOccurrence, ReminderTemplate
-
+from app.users.model import User
 
 MATERIALIZATION_WINDOW_DAYS = 60
 MAX_RECURRENCE_INTERVAL = 365
@@ -228,8 +230,7 @@ def materialize_reminder_occurrences(
         {
             "reminder_template_id": template.reminder_template_id,
             "scheduled_at": scheduled_at,
-            "due_at": scheduled_at
-            + timedelta(minutes=template.due_after_minutes),
+            "due_at": scheduled_at + timedelta(minutes=template.due_after_minutes),
             "status": ReminderOccurrenceStatus.UPCOMING,
         }
         for scheduled_at in scheduled_values
@@ -243,9 +244,32 @@ def materialize_reminder_occurrences(
                 ReminderOccurrence.scheduled_at,
             ]
         )
-        .returning(ReminderOccurrence.reminder_occurrence_id)
+        .returning(
+            ReminderOccurrence.reminder_occurrence_id,
+            ReminderOccurrence.created_at,
+        )
     )
-    return len(list(db.scalars(statement)))
+    inserted = list(db.execute(statement))
+    if not inserted:
+        return 0
+
+    creator = db.get(User, template.created_by_user_id)
+    if creator is None:
+        raise ReminderScheduleValidationError(
+            "Reminder template creator no longer exists."
+        )
+
+    for occurrence_id, created_at in inserted:
+        record_reminder_occurrence_event(
+            db,
+            occurrence_id=occurrence_id,
+            event_type=ReminderOccurrenceEventType.CREATED,
+            actor=creator,
+            occurred_at=created_at,
+            metadata={"source": "occurrence_materialization"},
+        )
+
+    return len(inserted)
 
 
 def materialize_active_reminder_occurrences(

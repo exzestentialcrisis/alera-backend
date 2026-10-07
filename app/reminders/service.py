@@ -5,13 +5,14 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.reminders.access import resolve_list_patient_id, visible_patient_ids
 from app.core.time import utc_now
 from app.households.model import Household, HouseholdStatus
 from app.patients.model import ElderlyPatient
+from app.reminders.access import resolve_list_patient_id, visible_patient_ids
 from app.reminders.enums import (
     ReminderActionType,
     ReminderCategory,
+    ReminderOccurrenceEventType,
     ReminderOccurrenceStatus,
 )
 from app.reminders.errors import (
@@ -20,9 +21,9 @@ from app.reminders.errors import (
     ReminderNotFoundError,
     ReminderQueryValidationError,
 )
+from app.reminders.event_service import record_reminder_occurrence_event
 from app.reminders.model import ReminderAction, ReminderOccurrence, ReminderTemplate
 from app.users.model import User, UserRole
-
 
 ReminderRow = tuple[ReminderOccurrence, ReminderTemplate]
 ReminderActionResult = tuple[ReminderOccurrence, ReminderTemplate, ReminderAction, bool]
@@ -34,7 +35,9 @@ def validate_reminder_time_range(
 ) -> None:
     for name, value in (("from_at", from_at), ("before_at", before_at)):
         if value is not None and (value.tzinfo is None or value.utcoffset() is None):
-            raise ReminderQueryValidationError(f"{name} must include timezone information.")
+            raise ReminderQueryValidationError(
+                f"{name} must include timezone information."
+            )
     if from_at is not None and before_at is not None and before_at <= from_at:
         raise ReminderQueryValidationError("before_at must be greater than from_at.")
 
@@ -72,9 +75,7 @@ def list_reminder_occurrences(
     offset: int,
 ) -> tuple[list[ReminderRow], int]:
     validate_reminder_time_range(from_at, before_at)
-    scoped_patient_id = resolve_list_patient_id(
-        db, actor=actor, patient_id=patient_id
-    )
+    scoped_patient_id = resolve_list_patient_id(db, actor=actor, patient_id=patient_id)
     filters = _reminder_filters(
         patient_id=scoped_patient_id,
         from_at=from_at,
@@ -87,16 +88,19 @@ def list_reminder_occurrences(
         ReminderOccurrence.reminder_template_id
         == ReminderTemplate.reminder_template_id,
     )
-    total = db.scalar(
-        select(func.count(ReminderOccurrence.reminder_occurrence_id))
-        .select_from(ReminderOccurrence)
-        .join(
-            ReminderTemplate,
-            ReminderOccurrence.reminder_template_id
-            == ReminderTemplate.reminder_template_id,
+    total = (
+        db.scalar(
+            select(func.count(ReminderOccurrence.reminder_occurrence_id))
+            .select_from(ReminderOccurrence)
+            .join(
+                ReminderTemplate,
+                ReminderOccurrence.reminder_template_id
+                == ReminderTemplate.reminder_template_id,
+            )
+            .where(*filters)
         )
-        .where(*filters)
-    ) or 0
+        or 0
+    )
     return list(
         db.execute(
             base.where(*filters)
@@ -138,9 +142,10 @@ def list_reminder_actions(
 ) -> tuple[list[ReminderAction], int]:
     get_reminder_occurrence(db, actor=actor, occurrence_id=occurrence_id)
     filters = [ReminderAction.reminder_occurrence_id == occurrence_id]
-    total = db.scalar(
-        select(func.count(ReminderAction.reminder_action_id)).where(*filters)
-    ) or 0
+    total = (
+        db.scalar(select(func.count(ReminderAction.reminder_action_id)).where(*filters))
+        or 0
+    )
     actions = list(
         db.scalars(
             select(ReminderAction)
@@ -201,7 +206,9 @@ def _locked_patient_occurrence(
     db: Session, *, actor: User, occurrence_id: UUID
 ) -> ReminderRow:
     if actor.role is not UserRole.ELDERLY_PATIENT:
-        raise ReminderAccessForbiddenError("Only patients may perform reminder actions.")
+        raise ReminderAccessForbiddenError(
+            "Only patients may perform reminder actions."
+        )
     row = db.execute(
         select(ReminderOccurrence, ReminderTemplate)
         .join(
@@ -229,7 +236,9 @@ def _locked_caregiver_occurrence(
     db: Session, *, actor: User, occurrence_id: UUID
 ) -> ReminderRow:
     if actor.role not in {UserRole.CAREGIVER, UserRole.CARE_ADMIN}:
-        raise ReminderAccessForbiddenError("Caregiver access is required for this action.")
+        raise ReminderAccessForbiddenError(
+            "Caregiver access is required for this action."
+        )
     row = db.execute(
         select(ReminderOccurrence, ReminderTemplate)
         .join(
@@ -270,11 +279,11 @@ def _same_action(
     return (action.action_metadata or {}) == (metadata or {})
 
 
-def _existing_action(
-    db: Session, *, client_action_id: UUID
-) -> ReminderAction | None:
+def _existing_action(db: Session, *, client_action_id: UUID) -> ReminderAction | None:
     return db.scalar(
-        select(ReminderAction).where(ReminderAction.client_action_id == client_action_id)
+        select(ReminderAction).where(
+            ReminderAction.client_action_id == client_action_id
+        )
     )
 
 
@@ -300,7 +309,9 @@ def _replay_or_conflict(
         metadata=metadata,
     ):
         return action
-    raise ReminderActionConflictError("client_action_id was already used for another action.")
+    raise ReminderActionConflictError(
+        "client_action_id was already used for another action."
+    )
 
 
 def _insert_action_safely(
@@ -368,7 +379,8 @@ def complete_reminder(
     previous_status = occurrence.status
     new_status = (
         ReminderOccurrenceStatus.COMPLETED_LATE
-        if previous_status is ReminderOccurrenceStatus.MISSED or action_time > occurrence.due_at
+        if previous_status is ReminderOccurrenceStatus.MISSED
+        or action_time > occurrence.due_at
         else ReminderOccurrenceStatus.COMPLETED
     )
     action = ReminderAction(
@@ -384,14 +396,31 @@ def complete_reminder(
         performed_at=action_time,
     )
     replay = _insert_action_safely(
-        db, action=action, actor=actor, occurrence=occurrence,
-        action_type=ReminderActionType.MARK_COMPLETED, note=note, snooze_minutes=None,
+        db,
+        action=action,
+        actor=actor,
+        occurrence=occurrence,
+        action_type=ReminderActionType.MARK_COMPLETED,
+        note=note,
+        snooze_minutes=None,
         metadata={},
     )
     if replay is not None:
         return occurrence, template, replay, True
     occurrence.status = new_status
     occurrence.updated_at = action_time
+    record_reminder_occurrence_event(
+        db,
+        occurrence_id=occurrence.reminder_occurrence_id,
+        event_type=(
+            ReminderOccurrenceEventType.COMPLETED_LATE
+            if new_status is ReminderOccurrenceStatus.COMPLETED_LATE
+            else ReminderOccurrenceEventType.COMPLETED
+        ),
+        actor=actor,
+        occurred_at=action_time,
+        note=note,
+    )
     return occurrence, template, action, False
 
 
@@ -413,8 +442,11 @@ def snooze_reminder(
     )
     replay = _replay_or_conflict(
         _existing_action(db, client_action_id=client_action_id),
-        actor=actor, occurrence=occurrence, action_type=ReminderActionType.SNOOZE,
-        note=note, snooze_minutes=effective_minutes,
+        actor=actor,
+        occurrence=occurrence,
+        action_type=ReminderActionType.SNOOZE,
+        note=note,
+        snooze_minutes=effective_minutes,
         metadata=None,
     )
     if replay is not None:
@@ -449,8 +481,12 @@ def snooze_reminder(
         performed_at=action_time,
     )
     replay = _insert_action_safely(
-        db, action=action, actor=actor, occurrence=occurrence,
-        action_type=ReminderActionType.SNOOZE, note=note,
+        db,
+        action=action,
+        actor=actor,
+        occurrence=occurrence,
+        action_type=ReminderActionType.SNOOZE,
+        note=note,
         snooze_minutes=effective_minutes,
     )
     if replay is not None:
@@ -458,6 +494,18 @@ def snooze_reminder(
     occurrence.status = ReminderOccurrenceStatus.SNOOZED
     occurrence.due_at = new_due_at
     occurrence.updated_at = action_time
+    record_reminder_occurrence_event(
+        db,
+        occurrence_id=occurrence.reminder_occurrence_id,
+        event_type=ReminderOccurrenceEventType.SNOOZED,
+        actor=actor,
+        occurred_at=action_time,
+        note=note,
+        metadata={
+            "snoozed_until": new_due_at.astimezone(timezone.utc).isoformat(),
+            "minutes": effective_minutes,
+        },
+    )
     return occurrence, template, action, False
 
 
@@ -487,7 +535,9 @@ def record_caregiver_reminder_action(
         return occurrence, template, replay, True
     if action_type is ReminderActionType.MARK_MISSED_HANDLED:
         if occurrence.status is not ReminderOccurrenceStatus.MISSED:
-            raise ReminderActionConflictError("Only missed reminders can be marked handled.")
+            raise ReminderActionConflictError(
+                "Only missed reminders can be marked handled."
+            )
         already_handled = db.scalar(
             select(ReminderAction.reminder_action_id).where(
                 ReminderAction.reminder_occurrence_id
@@ -645,4 +695,21 @@ def _mutate_caregiver_reminder(
         return occurrence, template, replay, True
     occurrence.status = new_status
     occurrence.updated_at = action_time
+    record_reminder_occurrence_event(
+        db,
+        occurrence_id=occurrence.reminder_occurrence_id,
+        event_type=(
+            ReminderOccurrenceEventType.COMPLETED_ON_BEHALF
+            if action_type is ReminderActionType.CAREGIVER_OVERRIDE
+            else ReminderOccurrenceEventType.CANCELED
+        ),
+        actor=actor,
+        occurred_at=action_time,
+        note=note,
+        metadata=(
+            {"resulting_status": new_status.value}
+            if action_type is ReminderActionType.CAREGIVER_OVERRIDE
+            else {}
+        ),
+    )
     return occurrence, template, action, False
