@@ -7,14 +7,15 @@ from sqlalchemy.orm import Session
 from app.reminders.enums import (
     ReminderActionType,
     ReminderNotificationChannel,
+    ReminderOccurrenceEventType,
     ReminderOccurrenceStatus,
 )
+from app.reminders.event_service import record_reminder_occurrence_event
 from app.reminders.model import ReminderAction, ReminderOccurrence, ReminderTemplate
 from app.reminders.notification_events import (
     queue_due_reminder_notification,
     queue_missed_reminder_notification,
 )
-
 
 DEFAULT_LIFECYCLE_BATCH_SIZE = 100
 MAX_LIFECYCLE_BATCH_SIZE = 500
@@ -53,10 +54,14 @@ def reminder_lifecycle_target(
             return ReminderOccurrenceStatus.MISSED
         if now >= scheduled - REMINDER_DUE_LEAD:
             return ReminderOccurrenceStatus.DUE
-    elif status in {
-        ReminderOccurrenceStatus.DUE,
-        ReminderOccurrenceStatus.SNOOZED,
-    } and now >= missed_at:
+    elif (
+        status
+        in {
+            ReminderOccurrenceStatus.DUE,
+            ReminderOccurrenceStatus.SNOOZED,
+        }
+        and now >= missed_at
+    ):
         return ReminderOccurrenceStatus.MISSED
     return status
 
@@ -70,14 +75,11 @@ def process_reminder_lifecycle(
     """Lock and advance one batch of eligible occurrences without committing."""
     now = _as_utc(at, field="at")
     if not 1 <= limit <= MAX_LIFECYCLE_BATCH_SIZE:
-        raise ValueError(
-            f"limit must be between 1 and {MAX_LIFECYCLE_BATCH_SIZE}."
-        )
+        raise ValueError(f"limit must be between 1 and {MAX_LIFECYCLE_BATCH_SIZE}.")
 
     missed_at = (
         ReminderOccurrence.due_at
-        + ReminderTemplate.missed_after_minutes
-        * literal_column("INTERVAL '1 minute'")
+        + ReminderTemplate.missed_after_minutes * literal_column("INTERVAL '1 minute'")
     )
     rows = list(
         db.execute(
@@ -89,14 +91,8 @@ def process_reminder_lifecycle(
             )
             .where(
                 or_(
-                    (
-                        ReminderOccurrence.status
-                        == ReminderOccurrenceStatus.UPCOMING
-                    )
-                    & (
-                        ReminderOccurrence.scheduled_at
-                        <= now + REMINDER_DUE_LEAD
-                    ),
+                    (ReminderOccurrence.status == ReminderOccurrenceStatus.UPCOMING)
+                    & (ReminderOccurrence.scheduled_at <= now + REMINDER_DUE_LEAD),
                     (
                         ReminderOccurrence.status.in_(
                             [
@@ -174,6 +170,17 @@ def process_reminder_lifecycle(
                 },
                 performed_at=now,
             )
+        )
+        record_reminder_occurrence_event(
+            db,
+            occurrence_id=occurrence.reminder_occurrence_id,
+            event_type=ReminderOccurrenceEventType.MARKED_MISSED,
+            occurred_at=now,
+            note="Automatically marked missed after the reminder deadline.",
+            metadata={
+                "previous_status": previous_status.value,
+                "source": "reminder_lifecycle",
+            },
         )
         if template.notification_channels is ReminderNotificationChannel.PUSH:
             queue_missed_reminder_notification(

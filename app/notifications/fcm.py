@@ -214,6 +214,34 @@ class FCMSender:
             },
         )
 
+    def send_help_request(
+        self,
+        token: str,
+        *,
+        help_request_id,
+        patient_id,
+        event_name: str,
+        request_status: str,
+        patient_display_name: str,
+        title: str,
+        body: str,
+    ) -> bool:
+        return self._send_message(
+            token,
+            title=title,
+            body=body,
+            data={
+                "type": "HELP_REQUEST",
+                "event": event_name,
+                "help_request_id": str(help_request_id),
+                "patient_id": str(patient_id),
+                "status": request_status,
+                "patient_display_name": patient_display_name,
+                "title": title,
+                "body": body,
+            },
+        )
+
     def send_patient_reminder(
         self,
         token: str,

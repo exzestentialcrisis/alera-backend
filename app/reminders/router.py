@@ -14,33 +14,36 @@ from app.reminders.enums import (
 )
 from app.reminders.errors import (
     ReminderAccessForbiddenError,
+    ReminderActionConflictError,
     ReminderNotFoundError,
     ReminderQueryValidationError,
-    ReminderActionConflictError,
 )
 from app.reminders.schema import (
+    ReminderActionHistoryResponse,
+    ReminderActionResponse,
+    ReminderCancelRequest,
+    ReminderCaregiverCompleteRequest,
+    ReminderCareNoteRequest,
+    ReminderCompleteRequest,
+    ReminderMissedHandledRequest,
+    ReminderOccurrenceEventHistoryResponse,
     ReminderOccurrenceListResponse,
     ReminderOccurrenceRead,
-    ReminderActionResponse,
-    ReminderCompleteRequest,
     ReminderSnoozeRequest,
-    ReminderCareNoteRequest,
-    ReminderCaregiverCompleteRequest,
-    ReminderCancelRequest,
-    ReminderMissedHandledRequest,
-    ReminderActionHistoryResponse,
 )
 from app.reminders.service import (
-    get_reminder_occurrence,
-    list_reminder_occurrences,
-    reminder_occurrence_payload,
-    reminder_action_payload,
-    complete_reminder,
-    snooze_reminder,
-    list_reminder_actions,
-    record_caregiver_reminder_action,
-    complete_reminder_on_behalf,
     cancel_reminder,
+    complete_reminder,
+    complete_reminder_on_behalf,
+    get_reminder_occurrence,
+    list_reminder_actions,
+    list_reminder_occurrence_events,
+    list_reminder_occurrences,
+    record_caregiver_reminder_action,
+    reminder_action_payload,
+    reminder_occurrence_event_payload,
+    reminder_occurrence_payload,
+    snooze_reminder,
 )
 from app.users.model import User
 
@@ -49,13 +52,21 @@ router = APIRouter(prefix="/api/v1/reminders", tags=["Reminders"])
 
 def _raise_http_error(exc: Exception) -> None:
     if isinstance(exc, ReminderNotFoundError):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     if isinstance(exc, ReminderAccessForbiddenError):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
     if isinstance(exc, ReminderQueryValidationError):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
     if isinstance(exc, ReminderActionConflictError):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     raise exc
 
 
@@ -64,8 +75,12 @@ async def get_reminders(
     patient_id: UUID | None = None,
     from_at: datetime | None = None,
     before_at: datetime | None = None,
-    statuses: Annotated[list[ReminderOccurrenceStatus] | None, Query(alias="status")] = None,
-    categories: Annotated[list[ReminderCategory] | None, Query(alias="category")] = None,
+    statuses: Annotated[
+        list[ReminderOccurrenceStatus] | None, Query(alias="status")
+    ] = None,
+    categories: Annotated[
+        list[ReminderCategory] | None, Query(alias="category")
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
     actor: User = Depends(get_current_actor),
@@ -91,7 +106,10 @@ async def get_reminders(
         _raise_http_error(exc)
         raise AssertionError("unreachable")
     return {
-        "items": [reminder_occurrence_payload(occurrence, template) for occurrence, template in items],
+        "items": [
+            reminder_occurrence_payload(occurrence, template)
+            for occurrence, template in items
+        ],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -129,7 +147,12 @@ async def get_reminder_actions(
     except ReminderNotFoundError as exc:
         _raise_http_error(exc)
         raise AssertionError("unreachable")
-    return {"items": [reminder_action_payload(action) for action in items], "total": total, "limit": limit, "offset": offset}
+    return {
+        "items": [reminder_action_payload(action) for action in items],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 def _run_patient_action(db: Session, operation) -> dict:
@@ -164,8 +187,11 @@ async def complete(
     return _run_patient_action(
         db,
         lambda: complete_reminder(
-            db, actor=actor, occurrence_id=occurrence_id,
-            client_action_id=payload.client_action_id, note=payload.note,
+            db,
+            actor=actor,
+            occurrence_id=occurrence_id,
+            client_action_id=payload.client_action_id,
+            note=payload.note,
         ),
     )
 
@@ -180,7 +206,9 @@ async def snooze(
     return _run_patient_action(
         db,
         lambda: snooze_reminder(
-            db, actor=actor, occurrence_id=occurrence_id,
+            db,
+            actor=actor,
+            occurrence_id=occurrence_id,
             client_action_id=payload.client_action_id,
             snooze_minutes=payload.snooze_minutes,
             note=payload.note,
@@ -242,9 +270,12 @@ async def add_note(
     return _run_caregiver_action(
         db,
         lambda: record_caregiver_reminder_action(
-            db, actor=actor, occurrence_id=occurrence_id,
+            db,
+            actor=actor,
+            occurrence_id=occurrence_id,
             client_action_id=payload.client_action_id,
-            action_type=ReminderActionType.ADD_NOTE, note=payload.note,
+            action_type=ReminderActionType.ADD_NOTE,
+            note=payload.note,
         ),
     )
 
@@ -259,9 +290,12 @@ async def follow_up(
     return _run_caregiver_action(
         db,
         lambda: record_caregiver_reminder_action(
-            db, actor=actor, occurrence_id=occurrence_id,
+            db,
+            actor=actor,
+            occurrence_id=occurrence_id,
             client_action_id=payload.client_action_id,
-            action_type=ReminderActionType.FOLLOW_UP, note=payload.note,
+            action_type=ReminderActionType.FOLLOW_UP,
+            note=payload.note,
         ),
     )
 
@@ -276,8 +310,45 @@ async def mark_missed_handled(
     return _run_caregiver_action(
         db,
         lambda: record_caregiver_reminder_action(
-            db, actor=actor, occurrence_id=occurrence_id,
+            db,
+            actor=actor,
+            occurrence_id=occurrence_id,
             client_action_id=payload.client_action_id,
-            action_type=ReminderActionType.MARK_MISSED_HANDLED, note=payload.note,
+            action_type=ReminderActionType.MARK_MISSED_HANDLED,
+            note=payload.note,
         ),
     )
+
+
+@router.get(
+    "/{occurrence_id}/events",
+    response_model=ReminderOccurrenceEventHistoryResponse,
+)
+async def get_reminder_events(
+    occurrence_id: UUID,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    actor: User = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    try:
+        items, total = list_reminder_occurrence_events(
+            db,
+            actor=actor,
+            occurrence_id=occurrence_id,
+            limit=limit,
+            offset=offset,
+        )
+    except ReminderNotFoundError as exc:
+        _raise_http_error(exc)
+        raise AssertionError("unreachable")
+
+    return {
+        "items": [
+            reminder_occurrence_event_payload(event, actor_display_name)
+            for event, actor_display_name in items
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }

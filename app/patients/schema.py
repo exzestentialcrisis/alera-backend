@@ -3,14 +3,29 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
-from app.household_access.schema import CaregiverAssignmentResponse
 from app.event_evaluations.model import EvaluationSeverity
+from app.household_access.schema import CaregiverAssignmentResponse
+from app.monitoring_devices.schema import MonitoringDeviceRead
 from app.patients.model import IntegrationStatus, Sex
 from app.users.model import AccountStatus
 
-from app.monitoring_devices.schema import MonitoringDeviceRead
+RELATIONSHIP_LABEL_MAX_LENGTH = 50
+
+
+def normalize_relationship_label(value: str | None) -> str | None:
+    """Normalize an optional caregiver-specific relationship label."""
+    if value is None:
+        return None
+    normalized = " ".join(value.split())
+    return normalized or None
 
 
 class PatientCreate(BaseModel):
@@ -32,6 +47,40 @@ class PatientCreate(BaseModel):
         default=None, ge=0, le=100, max_digits=5, decimal_places=2
     )
     monitoring_notes: str | None = None
+    relationship_label: str | None = Field(
+        default=None,
+        max_length=RELATIONSHIP_LABEL_MAX_LENGTH,
+    )
+
+    @field_validator("relationship_label", mode="before")
+    @classmethod
+    def normalize_relationship(cls, value: str | None) -> str | None:
+        return normalize_relationship_label(value)
+
+
+class PatientUpdate(BaseModel):
+    """Full replacement of editable profile fields from Edit Patient."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    full_name: str = Field(min_length=1, max_length=150)
+    birthdate: date | None
+    sex: Sex | None
+    phone_number: str | None = Field(max_length=11)
+    address_or_room: str | None
+    emergency_contact_name: str | None = Field(max_length=150)
+    emergency_contact_phone: str | None = Field(max_length=30)
+    known_conditions: str | None
+    medications: str | None
+    monitoring_notes: str | None
+    relationship_label: str | None = Field(
+        max_length=RELATIONSHIP_LABEL_MAX_LENGTH,
+    )
+
+    @field_validator("relationship_label", mode="before")
+    @classmethod
+    def normalize_relationship(cls, value: str | None) -> str | None:
+        return normalize_relationship_label(value)
 
 
 class PatientCreated(PatientCreate):
@@ -89,6 +138,7 @@ class PatientListItem(BaseModel):
     created_at: datetime
     current_summary: CurrentHealthSummary
     profile_photo_url: str | None = None
+    relationship_label: str | None = None
 
 
 class PatientListResponse(BaseModel):
@@ -160,11 +210,6 @@ class MonitoringSettingsResponse(BaseModel):
     usual_spo2_min: int
     usual_spo2_max: int | None
     updated_at: datetime
-
-
-class PatientProfilePhotoResponse(BaseModel):
-    patient_id: UUID
-    profile_photo_url: str
 
 
 class PatientProfilePhotoResponse(BaseModel):

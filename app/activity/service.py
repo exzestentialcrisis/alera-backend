@@ -24,6 +24,10 @@ from app.activity.schema import (
     ActivityTrendRange,
     ActivityTrendResponse,
     ActivityTrendSummary,
+    SleepTrendPoint,
+    SleepTrendRange,
+    SleepTrendResponse,
+    SleepTrendSummary,
 )
 from app.core.time import utc_now
 from app.patients.model import ElderlyPatient
@@ -503,6 +507,80 @@ def get_activity_trend(
         )
 
     return ActivityTrendResponse(
+        patient_id=patient.patient_id,
+        range=trend_range,
+        from_date=from_date,
+        to_date=to_date,
+        summary=summary,
+        points=points,
+    )
+
+def get_sleep_trend(
+    db: Session,
+    patient: ElderlyPatient,
+    trend_range: SleepTrendRange,
+) -> SleepTrendResponse:
+    """Return completed daily sleep durations for a selected period."""
+
+    period_days = (
+        7
+        if trend_range is SleepTrendRange.WEEK
+        else 30
+    )
+
+    to_date = utc_now().date()
+    from_date = to_date - timedelta(days=period_days - 1)
+
+    rows = db.execute(
+        select(
+            ActivityData.activity_date,
+            ActivityDailyData.total_duration_seconds,
+        )
+        .join(
+            ActivityDailyData,
+            ActivityDailyData.activity_data_id
+            == ActivityData.activity_data_id,
+        )
+        .where(
+            ActivityData.patient_id == patient.patient_id,
+            ActivityData.activity_type == ActivityType.SLEEP,
+            ActivityData.activity_date >= from_date,
+            ActivityData.activity_date <= to_date,
+            ActivityDailyData.total_duration_seconds > 0,
+        )
+        .order_by(ActivityData.activity_date)
+    ).all()
+
+    points = [
+        SleepTrendPoint(
+            activity_date=activity_date,
+            duration_seconds=int(duration_seconds),
+        )
+        for activity_date, duration_seconds in rows
+    ]
+
+    summary = SleepTrendSummary()
+
+    if points:
+        summary = SleepTrendSummary(
+            latest_night=points[-1],
+            average_duration_seconds=round(
+                sum(point.duration_seconds for point in points)
+                / len(points),
+                2,
+            ),
+            longest_night=max(
+                points,
+                key=lambda point: point.duration_seconds,
+            ),
+            shortest_night=min(
+                points,
+                key=lambda point: point.duration_seconds,
+            ),
+            nights_with_data=len(points),
+        )
+
+    return SleepTrendResponse(
         patient_id=patient.patient_id,
         range=trend_range,
         from_date=from_date,

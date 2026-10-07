@@ -1,47 +1,43 @@
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import Select, and_, case, func, select
 from sqlalchemy.orm import Session
 
-from app.monitoring_devices.model import MonitoringDevice
-
-from zoneinfo import ZoneInfo
-
+from app.activity.model import (
+    ActivityDailyData,
+    ActivityData,
+    ActivityType,
+)
 from app.alerts.model import Alert, AlertStatus
 from app.condition_trackers.model import ConditionTracker
-from app.core.time import utc_now
 from app.core.config import get_settings
-from app.patients.photo_storage import public_profile_photo_url
+from app.core.time import utc_now
 from app.event_evaluations.model import EvaluationSeverity
 from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 from app.household_access.errors import AccessForbiddenError
-from app.household_access.model import CaregiverPatientAssignment
-from app.household_access.model import PatientAccessCode
+from app.household_access.model import CaregiverPatientAssignment, PatientAccessCode
 from app.households.model import Household, HouseholdStatus
+from app.monitoring_devices.model import MonitoringDevice
 from app.patients.errors import PatientNotFoundError
 from app.patients.model import ElderlyPatient
+from app.patients.photo_storage import public_profile_photo_url
 from app.patients.schema import (
     CurrentHealthSummary,
     LatestReading,
-    MonitoringStatus,
-    PatientCreate,
-    PatientCreated,
-    PatientAccessStatus,
-    PatientAccessSummary,
     MonitoringSettingsResponse,
     MonitoringSettingsUpdate,
+    MonitoringStatus,
+    PatientAccessStatus,
+    PatientAccessSummary,
+    PatientCreate,
+    PatientCreated,
+    PatientUpdate,
     ThresholdMode,
 )
-from app.core.config import get_settings
-from app.patients.photo_storage import public_profile_photo_url
 from app.users.model import AccountStatus, User, UserRole
-from app.activity.model import (
-    ActivityData,
-    ActivityDailyData,
-    ActivityType,
-)
 
 ACCEPTED_EVENT_STATUSES = (
     ValidationStatus.VALID_REALTIME,
@@ -490,6 +486,9 @@ def patient_read_payload(row: PatientReadRow, *, detail: bool) -> dict:
             settings=get_settings(),
             object_path=patient.profile_photo_path,
         ),
+        "relationship_label": (
+            row.assignment.relationship_label if row.assignment is not None else None
+        ),
     }
     if detail:
         payload.update(
@@ -511,6 +510,39 @@ def patient_read_payload(row: PatientReadRow, *, detail: bool) -> dict:
             threshold_mode=_threshold_mode(patient),
         )
     return payload
+
+
+def update_patient(
+    db: Session,
+    actor: User,
+    patient_id: UUID,
+    payload: PatientUpdate,
+) -> dict:
+    """Update shared patient fields and the actor's own relationship label."""
+    row = get_patient(db, actor, patient_id)
+    patient, user = row.patient, row.user
+
+    user.full_name = payload.full_name
+    user.phone_number = payload.phone_number
+
+    patient.birthdate = payload.birthdate
+    patient.sex = payload.sex
+    patient.address_or_room = payload.address_or_room
+    patient.emergency_contact_name = payload.emergency_contact_name
+    patient.emergency_contact_phone = payload.emergency_contact_phone
+    patient.known_conditions = payload.known_conditions
+    patient.medications = payload.medications
+    patient.health_notes = payload.monitoring_notes
+
+    if row.assignment is not None:
+        row.assignment.relationship_label = payload.relationship_label
+    elif payload.relationship_label is not None:
+        raise AccessForbiddenError(
+            "A relationship label requires an active caregiver assignment."
+        )
+
+    db.flush()
+    return patient_read_payload(row, detail=True)
 
 
 class MonitoringSettingsValidationError(ValueError):
@@ -621,7 +653,12 @@ def create_patient(
     db.add(user)
     db.flush()
     fields = payload.model_dump(
-        exclude={"full_name", "phone_number", "monitoring_notes"}
+        exclude={
+            "full_name",
+            "phone_number",
+            "monitoring_notes",
+            "relationship_label",
+        }
     )
     patient = ElderlyPatient(
         user_id=user.user_id,
@@ -637,11 +674,16 @@ def create_patient(
             caregiver_user_id=actor.user_id,
             patient_id=patient.patient_id,
             assigned_by_user_id=actor.user_id,
+            relationship_label=payload.relationship_label,
         )
         db.add(assignment)
         db.flush()
+    created_payload = payload.model_dump()
+    created_payload["relationship_label"] = (
+        assignment.relationship_label if assignment is not None else None
+    )
     return PatientCreated(
-        **payload.model_dump(),
+        **created_payload,
         patient_id=patient.patient_id,
         user_id=user.user_id,
         household_id=household_id,
