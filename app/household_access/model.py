@@ -38,6 +38,10 @@ class CaregiverPatientAssignment(Base):
     assigned_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False
     )
+    relationship_label: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
