@@ -10,11 +10,12 @@ from app.notifications.fcm import FCMSender
 from app.patients.model import ElderlyPatient
 from app.reminders.enums import (
     ReminderNotificationChannel,
+    ReminderOccurrenceEventType,
     ReminderOccurrenceStatus,
 )
+from app.reminders.event_service import record_reminder_occurrence_event
 from app.reminders.model import ReminderOccurrence, ReminderTemplate
 from app.users.model import AccountStatus, User, UserRole
-
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ def deliver_due_reminder_notifications(bind, occurrence_ids) -> None:
                         PatientPushDevice.user_id == patient_user.user_id
                     )
                 ).all()
+                successful_deliveries = 0
                 for device in devices:
                     try:
                         invalid = sender.send_patient_reminder(
@@ -74,8 +76,22 @@ def deliver_due_reminder_notifications(bind, occurrence_ids) -> None:
                                     PatientPushDevice.updated_at == device.updated_at,
                                 )
                             )
+                        else:
+                            successful_deliveries += 1
                     except Exception:
                         logger.warning("Patient reminder FCM delivery failed.")
+
+                if successful_deliveries:
+                    record_reminder_occurrence_event(
+                        db,
+                        occurrence_id=occurrence.reminder_occurrence_id,
+                        event_type=ReminderOccurrenceEventType.NOTIFICATION_SENT,
+                        metadata={
+                            "channel": "PUSH",
+                            "audience": "PATIENT",
+                            "successful_deliveries": successful_deliveries,
+                        },
+                    )
             db.commit()
     except Exception:
         logger.warning("Due reminder notification delivery unavailable.")
@@ -127,6 +143,7 @@ def deliver_missed_reminder_notifications(bind, occurrence_ids) -> None:
                     )
                     .distinct()
                 ).all()
+                successful_deliveries = 0
                 for device in devices:
                     try:
                         invalid = sender.send_reminder(
@@ -145,8 +162,22 @@ def deliver_missed_reminder_notifications(bind, occurrence_ids) -> None:
                                     CaregiverPushDevice.updated_at == device.updated_at,
                                 )
                             )
+                        else:
+                            successful_deliveries += 1
                     except Exception:
                         logger.warning("Reminder FCM device delivery failed.")
+
+                if successful_deliveries:
+                    record_reminder_occurrence_event(
+                        db,
+                        occurrence_id=occurrence.reminder_occurrence_id,
+                        event_type=ReminderOccurrenceEventType.NOTIFICATION_SENT,
+                        metadata={
+                            "channel": "PUSH",
+                            "audience": "CAREGIVER",
+                            "successful_deliveries": successful_deliveries,
+                        },
+                    )
             db.commit()
     except Exception:
         logger.warning("Missed reminder notification delivery unavailable.")

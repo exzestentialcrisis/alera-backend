@@ -6,10 +6,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.reminders.enums import (
     ReminderActionType,
     ReminderCategory,
+    ReminderEventActorRole,
+    ReminderOccurrenceEventType,
     ReminderOccurrenceStatus,
     ReminderPriority,
 )
-
 
 REMINDER_ACTION_NOTE_MAX_LENGTH = 1000
 
@@ -117,6 +118,25 @@ class ReminderActionResponse(BaseModel):
 
 class ReminderActionHistoryResponse(BaseModel):
     items: list[ReminderActionRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class ReminderOccurrenceEventRead(BaseModel):
+    event_id: UUID
+    reminder_occurrence_id: UUID
+    event_type: ReminderOccurrenceEventType
+    occurred_at: datetime
+    actor_user_id: UUID | None
+    actor_role: ReminderEventActorRole
+    actor_display_name: str
+    note: str | None
+    metadata: dict
+
+
+class ReminderOccurrenceEventHistoryResponse(BaseModel):
+    items: list[ReminderOccurrenceEventRead]
     total: int
     limit: int
     offset: int

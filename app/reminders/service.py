@@ -12,6 +12,7 @@ from app.reminders.access import resolve_list_patient_id, visible_patient_ids
 from app.reminders.enums import (
     ReminderActionType,
     ReminderCategory,
+    ReminderEventActorRole,
     ReminderOccurrenceEventType,
     ReminderOccurrenceStatus,
 )
@@ -22,7 +23,12 @@ from app.reminders.errors import (
     ReminderQueryValidationError,
 )
 from app.reminders.event_service import record_reminder_occurrence_event
-from app.reminders.model import ReminderAction, ReminderOccurrence, ReminderTemplate
+from app.reminders.model import (
+    ReminderAction,
+    ReminderOccurrence,
+    ReminderOccurrenceEvent,
+    ReminderTemplate,
+)
 from app.users.model import User, UserRole
 
 ReminderRow = tuple[ReminderOccurrence, ReminderTemplate]
@@ -713,3 +719,72 @@ def _mutate_caregiver_reminder(
         ),
     )
     return occurrence, template, action, False
+
+
+def list_reminder_occurrence_events(
+    db: Session,
+    *,
+    actor: User,
+    occurrence_id: UUID,
+    limit: int,
+    offset: int,
+) -> tuple[list[tuple[ReminderOccurrenceEvent, str]], int]:
+    """Return an authorized occurrence timeline ordered oldest-first."""
+    get_reminder_occurrence(db, actor=actor, occurrence_id=occurrence_id)
+
+    filters = [
+        ReminderOccurrenceEvent.reminder_occurrence_id == occurrence_id,
+    ]
+    total = (
+        db.scalar(select(func.count(ReminderOccurrenceEvent.event_id)).where(*filters))
+        or 0
+    )
+
+    rows = db.execute(
+        select(ReminderOccurrenceEvent, User.full_name)
+        .outerjoin(
+            User,
+            User.user_id == ReminderOccurrenceEvent.actor_user_id,
+        )
+        .where(*filters)
+        .order_by(
+            ReminderOccurrenceEvent.occurred_at.asc(),
+            ReminderOccurrenceEvent.event_id.asc(),
+        )
+        .limit(limit)
+        .offset(offset)
+    ).all()
+
+    items = [
+        (
+            event,
+            (
+                display_name.strip()
+                if display_name and display_name.strip()
+                else (
+                    "Alera"
+                    if event.actor_role is ReminderEventActorRole.SYSTEM
+                    else event.actor_role.value.title()
+                )
+            ),
+        )
+        for event, display_name in rows
+    ]
+    return items, total
+
+
+def reminder_occurrence_event_payload(
+    event: ReminderOccurrenceEvent,
+    actor_display_name: str,
+) -> dict:
+    return {
+        "event_id": event.event_id,
+        "reminder_occurrence_id": event.reminder_occurrence_id,
+        "event_type": event.event_type,
+        "occurred_at": event.occurred_at.astimezone(timezone.utc),
+        "actor_user_id": event.actor_user_id,
+        "actor_role": event.actor_role,
+        "actor_display_name": actor_display_name,
+        "note": event.note,
+        "metadata": event.event_metadata or {},
+    }

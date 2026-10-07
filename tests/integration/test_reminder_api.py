@@ -14,10 +14,16 @@ from app.main import create_app
 from app.patients.model import ElderlyPatient, Sex
 from app.reminders.enums import (
     ReminderCategory,
+    ReminderEventActorRole,
+    ReminderOccurrenceEventType,
     ReminderOccurrenceStatus,
     ReminderPriority,
 )
-from app.reminders.model import ReminderOccurrence, ReminderTemplate
+from app.reminders.model import (
+    ReminderOccurrence,
+    ReminderOccurrenceEvent,
+    ReminderTemplate,
+)
 from app.users.model import User, UserRole
 
 pytestmark = pytest.mark.integration
@@ -103,25 +109,58 @@ def add_other_patient(db_session, *, owner=None):
     return owner, patient_user, household, patient
 
 
-def test_reminder_authentication_and_patient_access(reminder_api_app, db_session, patient):
+def test_reminder_authentication_and_patient_access(
+    reminder_api_app, db_session, patient
+):
     household = db_session.get(Household, patient.household_id)
     patient_user = db_session.get(User, patient.user_id)
-    occurrence, _ = add_reminder(db_session, patient, household and db_session.get(User, household.created_by_user_id))
+    occurrence, _ = add_reminder(
+        db_session,
+        patient,
+        household and db_session.get(User, household.created_by_user_id),
+    )
     _, _, other_household, other_patient = add_other_patient(db_session)
 
     assert request(reminder_api_app, "GET", "/api/v1/reminders").status_code == 401
     own_headers = headers(patient_user, household.household_id)
     listed = request(reminder_api_app, "GET", "/api/v1/reminders", headers=own_headers)
     assert listed.status_code == 200
-    assert [item["reminder_occurrence_id"] for item in listed.json()["items"]] == [str(occurrence.reminder_occurrence_id)]
-    assert request(reminder_api_app, "GET", f"/api/v1/reminders/{occurrence.reminder_occurrence_id}", headers=own_headers).status_code == 200
-    assert request(reminder_api_app, "GET", f"/api/v1/reminders?patient_id={other_patient.patient_id}", headers=own_headers).status_code == 403
+    assert [item["reminder_occurrence_id"] for item in listed.json()["items"]] == [
+        str(occurrence.reminder_occurrence_id)
+    ]
+    assert (
+        request(
+            reminder_api_app,
+            "GET",
+            f"/api/v1/reminders/{occurrence.reminder_occurrence_id}",
+            headers=own_headers,
+        ).status_code
+        == 200
+    )
+    assert (
+        request(
+            reminder_api_app,
+            "GET",
+            f"/api/v1/reminders?patient_id={other_patient.patient_id}",
+            headers=own_headers,
+        ).status_code
+        == 403
+    )
 
     other_occurrence, _ = add_reminder(
-        db_session, other_patient, db_session.get(User, other_household.created_by_user_id)
+        db_session,
+        other_patient,
+        db_session.get(User, other_household.created_by_user_id),
     )
-    inaccessible = request(reminder_api_app, "GET", f"/api/v1/reminders/{other_occurrence.reminder_occurrence_id}", headers=own_headers)
-    nonexistent = request(reminder_api_app, "GET", f"/api/v1/reminders/{uuid4()}", headers=own_headers)
+    inaccessible = request(
+        reminder_api_app,
+        "GET",
+        f"/api/v1/reminders/{other_occurrence.reminder_occurrence_id}",
+        headers=own_headers,
+    )
+    nonexistent = request(
+        reminder_api_app, "GET", f"/api/v1/reminders/{uuid4()}", headers=own_headers
+    )
     assert inaccessible.status_code == nonexistent.status_code == 404
     assert inaccessible.json() == nonexistent.json()
 
@@ -142,26 +181,101 @@ def test_reminder_caregiver_and_admin_scope(reminder_api_app, db_session, patien
     db_session.add(assignment)
     db_session.commit()
     caregiver_headers = headers(caregiver, household.household_id)
-    assert request(reminder_api_app, "GET", "/api/v1/reminders", headers=caregiver_headers).status_code == 422
-    assert request(reminder_api_app, "GET", f"/api/v1/reminders?patient_id={patient.patient_id}", headers=caregiver_headers).status_code == 200
-    assert request(reminder_api_app, "GET", f"/api/v1/reminders/{occurrence.reminder_occurrence_id}", headers=caregiver_headers).status_code == 200
+    assert (
+        request(
+            reminder_api_app, "GET", "/api/v1/reminders", headers=caregiver_headers
+        ).status_code
+        == 422
+    )
+    assert (
+        request(
+            reminder_api_app,
+            "GET",
+            f"/api/v1/reminders?patient_id={patient.patient_id}",
+            headers=caregiver_headers,
+        ).status_code
+        == 200
+    )
+    assert (
+        request(
+            reminder_api_app,
+            "GET",
+            f"/api/v1/reminders/{occurrence.reminder_occurrence_id}",
+            headers=caregiver_headers,
+        ).status_code
+        == 200
+    )
     denied_headers = headers(unassigned, household.household_id)
-    assert request(reminder_api_app, "GET", f"/api/v1/reminders?patient_id={patient.patient_id}", headers=denied_headers).status_code == 404
+    assert (
+        request(
+            reminder_api_app,
+            "GET",
+            f"/api/v1/reminders?patient_id={patient.patient_id}",
+            headers=denied_headers,
+        ).status_code
+        == 404
+    )
     assignment.unassigned_at = NOW
     db_session.commit()
-    assert request(reminder_api_app, "GET", f"/api/v1/reminders/{occurrence.reminder_occurrence_id}", headers=caregiver_headers).status_code == 404
+    assert (
+        request(
+            reminder_api_app,
+            "GET",
+            f"/api/v1/reminders/{occurrence.reminder_occurrence_id}",
+            headers=caregiver_headers,
+        ).status_code
+        == 404
+    )
 
-    assert request(reminder_api_app, "GET", f"/api/v1/reminders?patient_id={patient.patient_id}", headers=headers(owner, household.household_id)).status_code == 200
+    assert (
+        request(
+            reminder_api_app,
+            "GET",
+            f"/api/v1/reminders?patient_id={patient.patient_id}",
+            headers=headers(owner, household.household_id),
+        ).status_code
+        == 200
+    )
     other_admin, _, other_household, other_patient = add_other_patient(db_session)
-    assert request(reminder_api_app, "GET", f"/api/v1/reminders?patient_id={other_patient.patient_id}", headers=headers(owner, household.household_id)).status_code == 404
-    assert request(reminder_api_app, "GET", f"/api/v1/reminders?patient_id={patient.patient_id}", headers=headers(other_admin, other_household.household_id)).status_code == 404
+    assert (
+        request(
+            reminder_api_app,
+            "GET",
+            f"/api/v1/reminders?patient_id={other_patient.patient_id}",
+            headers=headers(owner, household.household_id),
+        ).status_code
+        == 404
+    )
+    assert (
+        request(
+            reminder_api_app,
+            "GET",
+            f"/api/v1/reminders?patient_id={patient.patient_id}",
+            headers=headers(other_admin, other_household.household_id),
+        ).status_code
+        == 404
+    )
 
 
-def test_reminder_filters_boundaries_pagination_and_joined_output(reminder_api_app, db_session, patient):
+def test_reminder_filters_boundaries_pagination_and_joined_output(
+    reminder_api_app, db_session, patient
+):
     household = db_session.get(Household, patient.household_id)
     owner = db_session.get(User, household.created_by_user_id)
-    first, first_template = add_reminder(db_session, patient, owner, scheduled_at=NOW, instructions="Take after breakfast.")
-    second, _ = add_reminder(db_session, patient, owner, scheduled_at=NOW + timedelta(hours=1), category=ReminderCategory.HYDRATION)
+    first, first_template = add_reminder(
+        db_session,
+        patient,
+        owner,
+        scheduled_at=NOW,
+        instructions="Take after breakfast.",
+    )
+    second, _ = add_reminder(
+        db_session,
+        patient,
+        owner,
+        scheduled_at=NOW + timedelta(hours=1),
+        category=ReminderCategory.HYDRATION,
+    )
     second.status = ReminderOccurrenceStatus.DUE
     db_session.commit()
     admin_headers = headers(owner, household.household_id)
@@ -170,7 +284,9 @@ def test_reminder_filters_boundaries_pagination_and_joined_output(reminder_api_a
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == 1
-    assert body["items"][0]["reminder_occurrence_id"] == str(first.reminder_occurrence_id)
+    assert body["items"][0]["reminder_occurrence_id"] == str(
+        first.reminder_occurrence_id
+    )
     assert body["items"][0]["title"] == first_template.title
     assert body["items"][0]["instructions"] == "Take after breakfast."
     category_filtered = request(
@@ -181,12 +297,40 @@ def test_reminder_filters_boundaries_pagination_and_joined_output(reminder_api_a
         headers=admin_headers,
     ).json()
     assert category_filtered["total"] == 2
-    assert request(reminder_api_app, "GET", f"/api/v1/reminders?patient_id={patient.patient_id}&from_at=2026-09-11T08:00:00", headers=admin_headers).status_code == 422
-    assert request(reminder_api_app, "GET", f"/api/v1/reminders?patient_id={patient.patient_id}&from_at=2026-09-11T09:00:00Z&before_at=2026-09-11T08:00:00Z", headers=admin_headers).status_code == 422
-    paged = request(reminder_api_app, "GET", f"/api/v1/reminders?patient_id={patient.patient_id}&limit=1&offset=1", headers=admin_headers).json()
+    assert (
+        request(
+            reminder_api_app,
+            "GET",
+            f"/api/v1/reminders?patient_id={patient.patient_id}&from_at=2026-09-11T08:00:00",
+            headers=admin_headers,
+        ).status_code
+        == 422
+    )
+    assert (
+        request(
+            reminder_api_app,
+            "GET",
+            f"/api/v1/reminders?patient_id={patient.patient_id}&from_at=2026-09-11T09:00:00Z&before_at=2026-09-11T08:00:00Z",
+            headers=admin_headers,
+        ).status_code
+        == 422
+    )
+    paged = request(
+        reminder_api_app,
+        "GET",
+        f"/api/v1/reminders?patient_id={patient.patient_id}&limit=1&offset=1",
+        headers=admin_headers,
+    ).json()
     assert paged["total"] == 2
-    assert paged["items"][0]["reminder_occurrence_id"] == str(second.reminder_occurrence_id)
-    empty = request(reminder_api_app, "GET", f"/api/v1/reminders?patient_id={patient.patient_id}&category=MEAL", headers=admin_headers).json()
+    assert paged["items"][0]["reminder_occurrence_id"] == str(
+        second.reminder_occurrence_id
+    )
+    empty = request(
+        reminder_api_app,
+        "GET",
+        f"/api/v1/reminders?patient_id={patient.patient_id}&category=MEAL",
+        headers=admin_headers,
+    ).json()
     assert empty == {"items": [], "total": 0, "limit": 20, "offset": 0}
 
 
@@ -207,5 +351,127 @@ def test_reminders_with_the_same_time_are_ordered_by_occurrence_id(
 
     assert response.status_code == 200
     assert [item["reminder_occurrence_id"] for item in response.json()["items"]] == [
-        str(item) for item in sorted((first.reminder_occurrence_id, second.reminder_occurrence_id))
+        str(item)
+        for item in sorted(
+            (first.reminder_occurrence_id, second.reminder_occurrence_id)
+        )
     ]
+
+
+def test_reminder_events_are_oldest_first_with_actor_names(
+    reminder_api_app,
+    db_session,
+    patient,
+):
+    household = db_session.get(Household, patient.household_id)
+    owner = db_session.get(User, household.created_by_user_id)
+    patient_user = db_session.get(User, patient.user_id)
+    occurrence, _ = add_reminder(db_session, patient, owner)
+
+    created = ReminderOccurrenceEvent(
+        reminder_occurrence_id=occurrence.reminder_occurrence_id,
+        event_type=ReminderOccurrenceEventType.CREATED,
+        occurred_at=NOW - timedelta(minutes=5),
+        actor_user_id=owner.user_id,
+        actor_role=ReminderEventActorRole.CAREGIVER,
+        event_metadata={"source": "test"},
+    )
+    missed = ReminderOccurrenceEvent(
+        reminder_occurrence_id=occurrence.reminder_occurrence_id,
+        event_type=ReminderOccurrenceEventType.MARKED_MISSED,
+        occurred_at=NOW,
+        actor_user_id=None,
+        actor_role=ReminderEventActorRole.SYSTEM,
+        note="Automatically marked missed.",
+        event_metadata={},
+    )
+    db_session.add_all([missed, created])
+    db_session.commit()
+
+    path = f"/api/v1/reminders/{occurrence.reminder_occurrence_id}/events"
+    response = request(
+        reminder_api_app,
+        "GET",
+        path,
+        headers=headers(owner, household.household_id),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    assert [item["event_type"] for item in body["items"]] == [
+        "CREATED",
+        "MARKED_MISSED",
+    ]
+    assert body["items"][0]["actor_display_name"] == owner.full_name
+    assert body["items"][1]["actor_display_name"] == "Alera"
+    assert body["items"][1]["note"] == "Automatically marked missed."
+
+    patient_response = request(
+        reminder_api_app,
+        "GET",
+        f"{path}?limit=1&offset=1",
+        headers=headers(patient_user, household.household_id),
+    )
+    assert patient_response.status_code == 200
+    assert patient_response.json()["total"] == 2
+    assert [item["event_type"] for item in patient_response.json()["items"]] == [
+        "MARKED_MISSED"
+    ]
+
+
+def test_reminder_events_do_not_leak_across_patient_or_household_scope(
+    reminder_api_app,
+    db_session,
+    patient,
+):
+    own_household = db_session.get(Household, patient.household_id)
+    own_owner = db_session.get(User, own_household.created_by_user_id)
+    own_patient_user = db_session.get(User, patient.user_id)
+
+    other_owner, _, other_household, other_patient = add_other_patient(db_session)
+    other_occurrence, _ = add_reminder(
+        db_session,
+        other_patient,
+        other_owner,
+    )
+    db_session.add(
+        ReminderOccurrenceEvent(
+            reminder_occurrence_id=other_occurrence.reminder_occurrence_id,
+            event_type=ReminderOccurrenceEventType.CREATED,
+            occurred_at=NOW,
+            actor_user_id=other_owner.user_id,
+            actor_role=ReminderEventActorRole.CAREGIVER,
+            event_metadata={},
+        )
+    )
+    db_session.commit()
+
+    path = f"/api/v1/reminders/{other_occurrence.reminder_occurrence_id}/events"
+
+    patient_denied = request(
+        reminder_api_app,
+        "GET",
+        path,
+        headers=headers(own_patient_user, own_household.household_id),
+    )
+    household_denied = request(
+        reminder_api_app,
+        "GET",
+        path,
+        headers=headers(own_owner, own_household.household_id),
+    )
+    allowed = request(
+        reminder_api_app,
+        "GET",
+        path,
+        headers=headers(other_owner, other_household.household_id),
+    )
+
+    assert patient_denied.status_code == 404
+    assert household_denied.status_code == 404
+    assert patient_denied.json() == household_denied.json()
+    assert allowed.status_code == 200
+    assert allowed.json()["total"] == 1
