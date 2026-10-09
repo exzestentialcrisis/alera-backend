@@ -10,6 +10,7 @@ from app.event_evaluations.model import EventEvaluation, MonitoringState
 from app.health_events.model import HealthEvent, MetricType, ValidationStatus
 from app.health_events.schema import HealthEventCreate
 from app.health_events.service import create_health_event
+from app.alerts.model import Alert
 
 from app.auth.security import create_access_token
 from tests.integration.test_caregiver_auth import (
@@ -230,3 +231,112 @@ def test_health_event_rejects_expired_token(api_app, db_session):
     )
 
     assert response.status_code == 401
+
+# Phase 3.3 — Data-access boundary
+
+def test_cross_patient_rejection_has_no_downstream_side_effects(
+    api_app,
+    db_session,
+):
+    _, household_a, patient_a, user_a = make_household(
+        db_session,
+        "Patient A",
+        "AAAA-BBBB",
+    )
+    _, _, patient_b, _ = make_household(
+        db_session,
+        "Patient B",
+        "CCCC-DDDD",
+    )
+    db_session.commit()
+
+    # Seed Patient B with one legitimate Critical reading.
+    # A second matching Critical reading would be capable of confirming
+    # the occurrence and producing an alert if it were accepted.
+    first_event = create(
+        db_session,
+        patient_b,
+        numeric_value="160",
+        recorded_at=datetime(
+            2026,
+            7,
+            17,
+            5,
+            0,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    tracker_before = db_session.scalar(
+        select(ConditionTracker).where(
+            ConditionTracker.patient_id == patient_b.patient_id,
+            ConditionTracker.active.is_(True),
+        )
+    )
+
+    assert tracker_before is not None
+    assert tracker_before.last_event_id == first_event.event_id
+
+    health_events_before = db_session.scalar(
+        select(func.count(HealthEvent.event_id))
+    )
+    evaluations_before = db_session.scalar(
+        select(func.count(EventEvaluation.evaluation_id))
+    )
+    trackers_before = db_session.scalar(
+        select(func.count(ConditionTracker.condition_tracker_id))
+    )
+    alerts_before = db_session.scalar(
+        select(func.count(Alert.alert_id))
+    )
+
+    payload = health_payload(patient_b.patient_id)
+    payload["numeric_value"] = "160"
+    payload["recorded_at"] = datetime(
+        2026,
+        7,
+        17,
+        5,
+        0,
+        15,
+        tzinfo=timezone.utc,
+    ).isoformat()
+
+    response = request(
+        api_app,
+        "POST",
+        "/api/v1/health-events",
+        headers=bearer_token(user_a, household_a),
+        json=payload,
+    )
+
+    assert patient_a.patient_id != patient_b.patient_id
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Patient identity mismatch."
+
+    assert db_session.scalar(
+        select(func.count(HealthEvent.event_id))
+    ) == health_events_before
+
+    assert db_session.scalar(
+        select(func.count(EventEvaluation.evaluation_id))
+    ) == evaluations_before
+
+    assert db_session.scalar(
+        select(func.count(ConditionTracker.condition_tracker_id))
+    ) == trackers_before
+
+    tracker_after = db_session.scalar(
+        select(ConditionTracker).where(
+            ConditionTracker.patient_id == patient_b.patient_id,
+            ConditionTracker.active.is_(True),
+        )
+    )
+
+    assert tracker_after is not None
+    assert tracker_after.last_event_id == first_event.event_id
+
+    assert db_session.scalar(
+        select(func.count(Alert.alert_id))
+    ) == alerts_before

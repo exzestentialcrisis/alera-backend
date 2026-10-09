@@ -127,6 +127,8 @@ def test_assigned_caregiver_login_and_bearer_dependency(api_app, db_session):
         "household_id": str(household.household_id),
         "household_name": "Home",
         "household_code": "4V8F-29HC",
+        "patient_id": None,
+        
     }
     actor_response = request(
         api_app,
