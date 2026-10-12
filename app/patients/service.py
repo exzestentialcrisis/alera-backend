@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import timezone
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -722,4 +723,7 @@ def archive_patient(db: Session, actor: User, patient_id: UUID):
         ):
             code.revoked_at = patient.archived_at
         db.flush()
-    return {"patient_id": patient.patient_id, "archived_at": patient.archived_at}
+    return {
+        "patient_id": patient.patient_id,
+        "archived_at": patient.archived_at.astimezone(timezone.utc),
+    }
