@@ -68,7 +68,12 @@ def assign_caregiver(
     return _handle(
         db,
         lambda: create_assignment(
-            db, household_id, payload.caregiver_user_id, payload.patient_id, actor
+            db,
+            household_id,
+            payload.caregiver_user_id,
+            payload.patient_id,
+            actor,
+            payload.assignment_role,
         ),
     )
 

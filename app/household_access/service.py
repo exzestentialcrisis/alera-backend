@@ -49,7 +49,10 @@ def _patient_for_code_management(
     db: Session, patient_id: UUID, actor: User
 ) -> ElderlyPatient:
     _require_active_actor(actor)
-    if actor.account_status is not AccountStatus.ACTIVE or actor.role is UserRole.ELDERLY_PATIENT:
+    if (
+        actor.account_status is not AccountStatus.ACTIVE
+        or actor.role is UserRole.ELDERLY_PATIENT
+    ):
         raise AccessForbiddenError("Actor is not permitted to manage this patient.")
     patient = db.get(ElderlyPatient, patient_id)
     if patient is None:
@@ -65,13 +68,16 @@ def _patient_for_code_management(
     if not archived and actor.role is UserRole.CARE_ADMIN:
         permitted = household.created_by_user_id == actor.user_id
     elif not archived and actor.role is UserRole.CAREGIVER:
-        permitted = db.scalar(
-            select(CaregiverPatientAssignment.assignment_id).where(
-                CaregiverPatientAssignment.caregiver_user_id == actor.user_id,
-                CaregiverPatientAssignment.patient_id == patient.patient_id,
-                CaregiverPatientAssignment.unassigned_at.is_(None),
+        permitted = (
+            db.scalar(
+                select(CaregiverPatientAssignment.assignment_id).where(
+                    CaregiverPatientAssignment.caregiver_user_id == actor.user_id,
+                    CaregiverPatientAssignment.patient_id == patient.patient_id,
+                    CaregiverPatientAssignment.unassigned_at.is_(None),
+                )
             )
-        ) is not None
+            is not None
+        )
     if not permitted:
         raise AccessForbiddenError("Actor is not permitted to manage this patient.")
     return patient
@@ -83,6 +89,7 @@ def create_assignment(
     caregiver_user_id: UUID,
     patient_id: UUID,
     actor: User,
+    assignment_role: str = "PRIMARY",
 ) -> CaregiverPatientAssignment:
     _admin_household(db, household_id, actor)
     caregiver = db.get(User, caregiver_user_id)
@@ -111,7 +118,9 @@ def create_assignment(
         .limit(1)
     )
     if other_household is not None:
-        raise AccessForbiddenError("Cross-household caregiver assignment is not allowed.")
+        raise AccessForbiddenError(
+            "Cross-household caregiver assignment is not allowed."
+        )
     duplicate = db.scalar(
         select(CaregiverPatientAssignment.assignment_id).where(
             CaregiverPatientAssignment.caregiver_user_id == caregiver_user_id,
@@ -121,10 +130,23 @@ def create_assignment(
     )
     if duplicate is not None:
         raise AccessConflictError("An active assignment already exists.")
+    if assignment_role == "BACKUP":
+        existing_backup = db.scalar(
+            select(CaregiverPatientAssignment.assignment_id).where(
+                CaregiverPatientAssignment.patient_id == patient_id,
+                CaregiverPatientAssignment.assignment_role == "BACKUP",
+                CaregiverPatientAssignment.unassigned_at.is_(None),
+            )
+        )
+        if existing_backup is not None:
+            raise AccessConflictError(
+                "This patient already has an active backup caregiver."
+            )
     assignment = CaregiverPatientAssignment(
         caregiver_user_id=caregiver_user_id,
         patient_id=patient_id,
         assigned_by_user_id=actor.user_id,
+        assignment_role=assignment_role,
     )
     db.add(assignment)
     try:

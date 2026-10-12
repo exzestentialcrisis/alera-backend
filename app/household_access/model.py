@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,6 +24,18 @@ class CaregiverPatientAssignment(Base):
             "patient_id",
             postgresql_where=text("unassigned_at IS NULL"),
         ),
+        Index(
+            "uq_caregiver_patient_assignments_active_backup",
+            "patient_id",
+            unique=True,
+            postgresql_where=text(
+                "unassigned_at IS NULL AND assignment_role = 'BACKUP'"
+            ),
+        ),
+        CheckConstraint(
+            "assignment_role IN ('PRIMARY', 'BACKUP')",
+            name="ck_caregiver_patient_assignments_role",
+        ),
     )
 
     assignment_id: Mapped[uuid.UUID] = mapped_column(
@@ -41,6 +53,9 @@ class CaregiverPatientAssignment(Base):
     relationship_label: Mapped[str | None] = mapped_column(
         String(50),
         nullable=True,
+    )
+    assignment_role: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="PRIMARY", server_default="PRIMARY"
     )
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
@@ -75,13 +90,17 @@ class PatientAccessCode(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     def is_valid(self, *, at: datetime | None = None) -> bool:
         now = at or utc_now()
-        return self.used_at is None and self.revoked_at is None and self.expires_at > now
+        return (
+            self.used_at is None and self.revoked_at is None and self.expires_at > now
+        )
 
     @property
     def status(self) -> str:

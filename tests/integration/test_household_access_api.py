@@ -24,7 +24,11 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def api_app(db_session):
-    app = create_app(Settings(environment="testing", database_url=None, alera_jwt_secret="test-secret"))
+    app = create_app(
+        Settings(
+            environment="testing", database_url=None, alera_jwt_secret="test-secret"
+        )
+    )
 
     async def override_db():
         yield db_session
@@ -44,8 +48,17 @@ def request(app, method, path, **kwargs):
 
 
 def headers(user, *, bearer=False):
-    token, _ = create_access_token(user_id=user.user_id, household_id=getattr(user, "test_household_id", uuid4()), secret="test-secret", expires_minutes=30)
-    return {"Authorization": f"Bearer {token}"} if bearer else {"X-Alera-Actor-Id": str(user.user_id)}
+    token, _ = create_access_token(
+        user_id=user.user_id,
+        household_id=getattr(user, "test_household_id", uuid4()),
+        secret="test-secret",
+        expires_minutes=30,
+    )
+    return (
+        {"Authorization": f"Bearer {token}"}
+        if bearer
+        else {"X-Alera-Actor-Id": str(user.user_id)}
+    )
 
 
 def build_household(db, name):
@@ -130,7 +143,9 @@ def test_assignment_permissions_and_archived_entities(api_app, db_session):
 
     assert assign(api_app, outsider, household, caregiver, patient).status_code == 403
     assert assign(api_app, caregiver, household, caregiver, patient).status_code == 403
-    assert assign(api_app, patient_user, household, caregiver, patient).status_code == 403
+    assert (
+        assign(api_app, patient_user, household, caregiver, patient).status_code == 403
+    )
     assert assign(api_app, disabled, household, caregiver, patient).status_code == 403
 
     household.household_status = HouseholdStatus.ARCHIVED
@@ -150,8 +165,18 @@ def test_access_code_permissions_hashing_replacement_and_revocation(
     assert assign(api_app, admin, household, caregiver, patient).status_code == 201
     path = f"/api/v1/patients/{patient.patient_id}/access-codes"
 
-    assert request(api_app, "POST", path, headers=headers(unassigned, bearer=True), json={}).status_code == 403
-    assert request(api_app, "POST", path, headers=headers(patient_user, bearer=True), json={}).status_code == 403
+    assert (
+        request(
+            api_app, "POST", path, headers=headers(unassigned, bearer=True), json={}
+        ).status_code
+        == 403
+    )
+    assert (
+        request(
+            api_app, "POST", path, headers=headers(patient_user, bearer=True), json={}
+        ).status_code
+        == 403
+    )
     first = request(api_app, "POST", path, headers=headers(admin, bearer=True), json={})
     assert first.status_code == 201
     plaintext = first.json()["access_code"]
@@ -161,7 +186,9 @@ def test_access_code_permissions_hashing_replacement_and_revocation(
     assert stored.access_code_selector == plaintext[:4]
     assert not verify_access_code("AAAA-AAAA-AAAA", stored.code_hash)
 
-    replacement = request(api_app, "POST", path, headers=headers(caregiver, bearer=True), json={})
+    replacement = request(
+        api_app, "POST", path, headers=headers(caregiver, bearer=True), json={}
+    )
     assert replacement.status_code == 201
     db_session.refresh(stored)
     assert stored.revoked_at is not None
@@ -203,11 +230,21 @@ def test_archived_patient_and_disabled_actor_cannot_manage_codes(api_app, db_ses
     patient.archived_at = datetime.now(timezone.utc)
     db_session.commit()
     path = f"/api/v1/patients/{patient.patient_id}/access-codes"
-    assert request(api_app, "POST", path, headers=headers(admin, bearer=True), json={}).status_code == 403
+    assert (
+        request(
+            api_app, "POST", path, headers=headers(admin, bearer=True), json={}
+        ).status_code
+        == 403
+    )
     patient.archived_at = None
     admin.account_status = AccountStatus.ARCHIVED
     db_session.commit()
-    assert request(api_app, "POST", path, headers=headers(admin, bearer=True), json={}).status_code == 401
+    assert (
+        request(
+            api_app, "POST", path, headers=headers(admin, bearer=True), json={}
+        ).status_code
+        == 401
+    )
 
 
 def test_code_bearer_permissions_for_issue_and_revoke(api_app, db_session):
@@ -217,19 +254,132 @@ def test_code_bearer_permissions_for_issue_and_revoke(api_app, db_session):
     db_session.add(caregiver)
     db_session.commit()
     path = f"/api/v1/patients/{patient.patient_id}/access-codes"
-    assert request(api_app, "POST", path, headers=headers(admin), json={}).status_code == 401
-    issued = request(api_app, "POST", path, headers=headers(admin, bearer=True), json={})
+    assert (
+        request(api_app, "POST", path, headers=headers(admin), json={}).status_code
+        == 401
+    )
+    issued = request(
+        api_app, "POST", path, headers=headers(admin, bearer=True), json={}
+    )
     revoke = f"{path}/{issued.json()['access_code_id']}/revoke"
     for actor in (outsider, caregiver, patient_user):
-        assert request(api_app, "POST", path, headers=headers(actor, bearer=True), json={}).status_code == 403
-        assert request(api_app, "POST", revoke, headers=headers(actor, bearer=True)).status_code == 403
+        assert (
+            request(
+                api_app, "POST", path, headers=headers(actor, bearer=True), json={}
+            ).status_code
+            == 403
+        )
+        assert (
+            request(
+                api_app, "POST", revoke, headers=headers(actor, bearer=True)
+            ).status_code
+            == 403
+        )
     assert assign(api_app, admin, household, caregiver, patient).status_code == 201
-    assert request(api_app, "POST", revoke, headers=headers(caregiver, bearer=True)).status_code == 200
-    assignment = db_session.scalar(select(CaregiverPatientAssignment).where(CaregiverPatientAssignment.caregiver_user_id == caregiver.user_id))
+    assert (
+        request(
+            api_app, "POST", revoke, headers=headers(caregiver, bearer=True)
+        ).status_code
+        == 200
+    )
+    assignment = db_session.scalar(
+        select(CaregiverPatientAssignment).where(
+            CaregiverPatientAssignment.caregiver_user_id == caregiver.user_id
+        )
+    )
     assignment.unassigned_at = datetime.now(timezone.utc)
     db_session.commit()
-    assert request(api_app, "POST", revoke, headers=headers(caregiver, bearer=True)).status_code == 403
+    assert (
+        request(
+            api_app, "POST", revoke, headers=headers(caregiver, bearer=True)
+        ).status_code
+        == 403
+    )
     household.household_status = HouseholdStatus.INACTIVE
     db_session.commit()
-    assert request(api_app, "POST", path, headers=headers(admin, bearer=True), json={}).status_code == 403
-    assert request(api_app, "POST", revoke, headers=headers(admin, bearer=True)).status_code == 403
+    assert (
+        request(
+            api_app, "POST", path, headers=headers(admin, bearer=True), json={}
+        ).status_code
+        == 403
+    )
+    assert (
+        request(
+            api_app, "POST", revoke, headers=headers(admin, bearer=True)
+        ).status_code
+        == 403
+    )
+
+
+def test_backup_assignment_role_and_single_active_backup(api_app, db_session):
+    admin, household, patient, _patient_user = build_household(
+        db_session, "Backup Assignment Home"
+    )
+    first = User(full_name="First Backup", role=UserRole.CAREGIVER)
+    second = User(full_name="Second Backup", role=UserRole.CAREGIVER)
+    db_session.add_all([first, second])
+    db_session.commit()
+
+    path = f"/api/v1/households/{household.household_id}/caregiver-assignments"
+
+    created = request(
+        api_app,
+        "POST",
+        path,
+        headers=headers(admin),
+        json={
+            "caregiver_user_id": str(first.user_id),
+            "patient_id": str(patient.patient_id),
+            "assignment_role": "BACKUP",
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["assignment_role"] == "BACKUP"
+
+    duplicate = request(
+        api_app,
+        "POST",
+        path,
+        headers=headers(admin),
+        json={
+            "caregiver_user_id": str(second.user_id),
+            "patient_id": str(patient.patient_id),
+            "assignment_role": "BACKUP",
+        },
+    )
+    assert duplicate.status_code == 409
+
+    invalid = request(
+        api_app,
+        "POST",
+        path,
+        headers=headers(admin),
+        json={
+            "caregiver_user_id": str(second.user_id),
+            "patient_id": str(patient.patient_id),
+            "assignment_role": "EMERGENCY_BESTIE",
+        },
+    )
+    assert invalid.status_code == 422
+
+    unassigned = request(
+        api_app,
+        "POST",
+        (f"{path}/{created.json()['assignment_id']}/unassign"),
+        headers=headers(admin),
+    )
+    assert unassigned.status_code == 200
+
+    replacement = request(
+        api_app,
+        "POST",
+        path,
+        headers=headers(admin),
+        json={
+            "caregiver_user_id": str(second.user_id),
+            "patient_id": str(patient.patient_id),
+            "assignment_role": "BACKUP",
+        },
+    )
+    assert replacement.status_code == 201
+    assert replacement.json()["assignment_role"] == "BACKUP"

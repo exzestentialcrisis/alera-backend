@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -7,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class CaregiverAssignmentCreate(BaseModel):
     caregiver_user_id: UUID
     patient_id: UUID
+    assignment_role: Literal["PRIMARY", "BACKUP"] = "PRIMARY"
 
 
 class CaregiverAssignmentResponse(BaseModel):
@@ -16,6 +18,7 @@ class CaregiverAssignmentResponse(BaseModel):
     caregiver_user_id: UUID
     patient_id: UUID
     assigned_by_user_id: UUID
+    assignment_role: Literal["PRIMARY", "BACKUP"]
     assigned_at: datetime
     unassigned_at: datetime | None
 
