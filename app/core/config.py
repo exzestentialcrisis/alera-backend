@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     firebase_project_id: str | None = None
     firebase_service_account_json: SecretStr | None = None
 
+    sms_enabled: bool = False
+    semaphore_api_key: SecretStr | None = None
+    semaphore_sender_name: str | None = None
+    semaphore_api_url: str = "https://api.semaphore.co/api/v4/messages"
+    sms_timeout_seconds: float = 10.0
+
     device_heartbeat_stale_seconds: int = 150
     device_liveness_check_seconds: int = 30
     watch_not_worn_grace_seconds: int = 180
