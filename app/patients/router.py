@@ -42,6 +42,7 @@ from app.patients.photo_storage import (
 from app.patients.schema import (
     MonitoringSettingsResponse,
     MonitoringSettingsUpdate,
+    PatientArchived,
     PatientCreate,
     PatientCreated,
     PatientDetail,
@@ -51,6 +52,7 @@ from app.patients.schema import (
 )
 from app.patients.service import (
     MonitoringSettingsValidationError,
+    archive_patient,
     create_patient,
     get_patient,
     list_patients,
@@ -456,6 +458,29 @@ def create(
     except AccessForbiddenError as exc:
         db.rollback()
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post(
+    "/{patient_id}/archive",
+    response_model=PatientArchived,
+    summary="Archive a patient",
+    responses={404: {"description": "Patient not found in the actor's scope."}},
+)
+def archive(
+    patient_id: UUID,
+    actor: User = Depends(get_current_caregiver),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = archive_patient(db, actor, patient_id)
+        db.commit()
+        return result
+    except PatientNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception:
         db.rollback()
         raise
