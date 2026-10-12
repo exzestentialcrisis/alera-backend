@@ -215,3 +215,8 @@ class MonitoringSettingsResponse(BaseModel):
 class PatientProfilePhotoResponse(BaseModel):
     patient_id: UUID
     profile_photo_url: str
+
+
+class PatientArchived(BaseModel):
+    patient_id: UUID
+    archived_at: datetime

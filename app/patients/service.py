@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import timezone
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -57,16 +58,17 @@ class PatientReadRow:
     monitoring_devices: tuple[MonitoringDevice, ...] = ()
 
 
-def _patient_scope(actor: User) -> Select:
+def _patient_scope(actor: User, *, include_archived: bool = False) -> Select:
     base = (
         select(ElderlyPatient.patient_id)
         .join(Household, Household.household_id == ElderlyPatient.household_id)
         .where(
-            ElderlyPatient.archived_at.is_(None),
             Household.household_status == HouseholdStatus.ACTIVE,
             Household.archived_at.is_(None),
         )
     )
+    if not include_archived:
+        base = base.where(ElderlyPatient.archived_at.is_(None))
     if actor.role is UserRole.CAREGIVER:
         return base.where(
             ElderlyPatient.patient_id.in_(
@@ -696,3 +698,32 @@ def create_patient(
         assignment=assignment,
         created_at=patient.created_at,
     )
+
+
+def archive_patient(db: Session, actor: User, patient_id: UUID):
+    """Soft archive within profile-edit scope; preserve history and retry safety."""
+    patient = db.scalar(
+        select(ElderlyPatient)
+        .where(
+            ElderlyPatient.patient_id == patient_id,
+            ElderlyPatient.patient_id.in_(_patient_scope(actor, include_archived=True)),
+        )
+        .with_for_update()
+    )
+    if patient is None:
+        raise PatientNotFoundError("Patient not found.")
+    if patient.archived_at is None:
+        patient.archived_at = utc_now()
+        for code in db.scalars(
+            select(PatientAccessCode).where(
+                PatientAccessCode.patient_id == patient_id,
+                PatientAccessCode.used_at.is_(None),
+                PatientAccessCode.revoked_at.is_(None),
+            )
+        ):
+            code.revoked_at = patient.archived_at
+        db.flush()
+    return {
+        "patient_id": patient.patient_id,
+        "archived_at": patient.archived_at.astimezone(timezone.utc),
+    }

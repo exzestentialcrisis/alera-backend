@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
-
+from app.auth.security import create_access_token
 from app.core.config import Settings
 from app.db.database import get_db
 from app.event_evaluations.model import EventEvaluation
@@ -16,17 +16,36 @@ import app.health_events.service as ingestion_service
 from app.main import create_app
 
 pytestmark = pytest.mark.integration
-
+JWT_SECRET = "api-errors-test-secret-that-is-long-and-random-enough"
 
 @pytest.fixture()
-def client(db_session):
-    app = create_app(Settings(environment="testing", database_url=None))
+def client(db_session, patient):
+    app = create_app(
+        Settings(
+            environment="testing",
+            database_url=None,
+            alera_jwt_secret=JWT_SECRET,
+        )
+    )
 
     def override_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_db
-    return TestClient(app, raise_server_exceptions=False)
+
+    token, _ = create_access_token(
+        user_id=patient.user_id,
+        household_id=patient.household_id,
+        secret=JWT_SECRET,
+        expires_minutes=30,
+    )
+
+    client = TestClient(app, raise_server_exceptions=False)
+    client.headers.update({
+        "Authorization": f"Bearer {token}",
+    })
+
+    return client
 
 
 def json_payload(event_payload):
@@ -36,12 +55,19 @@ def json_payload(event_payload):
     return data
 
 
-def test_unknown_patient_returns_404(client, event_payload):
+def test_mismatched_patient_returns_403(client, event_payload):
     payload = json_payload(event_payload)
     payload["patient_id"] = str(uuid4())
-    response = client.post("/api/v1/health-events", json=payload)
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Patient not found."}
+
+    response = client.post(
+        "/api/v1/health-events",
+        json=payload,
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "Patient identity mismatch.",
+    }
 
 
 def test_identical_duplicate_is_idempotent(client, db_session, event_payload):
@@ -69,7 +95,7 @@ def test_conflicting_duplicate_returns_409(client, event_payload):
 def test_session_is_usable_after_failed_request(client, db_session, event_payload):
     payload = json_payload(event_payload)
     payload["patient_id"] = str(uuid4())
-    assert client.post("/api/v1/health-events", json=payload).status_code == 404
+    assert client.post("/api/v1/health-events", json=payload).status_code == 403
     assert db_session.scalar(select(func.count(HealthEvent.event_id))) == 0
 
 
