@@ -97,9 +97,10 @@ def test_valid_provider_can_only_rank_approved_candidates():
     )
 
     assert response.source is InsightSource.AI_RANKED
+    # Critical insights are mandatory and always appear first.
     assert [item.insight_id for item in response.items] == [
-        "SPO2_LATEST_BELOW_RANGE",
         "CRITICAL_ALERTS_RECORDED",
+        "SPO2_LATEST_BELOW_RANGE",
     ]
     assert provider.prompt is not None
 
@@ -131,3 +132,16 @@ def test_prompt_excludes_patient_identifier_and_forbids_new_claims():
     assert str(packet.patient_id) not in prompt
     assert "do not add medical advice" in prompt
     assert "CRITICAL_ALERTS_RECORDED" in prompt
+
+
+def test_ai_cannot_omit_critical_alert_insight():
+    response = generate_caregiver_insights(
+        _packet(critical=1, warning=1),
+        FakeProvider('{"selected_ids":["WARNING_ALERTS_RECORDED"]}'),
+    )
+
+    assert response.source is InsightSource.AI_RANKED
+    assert [item.insight_id for item in response.items] == [
+        "CRITICAL_ALERTS_RECORDED",
+        "WARNING_ALERTS_RECORDED",
+    ]

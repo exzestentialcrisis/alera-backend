@@ -61,7 +61,18 @@ def generate_caregiver_insights(
         by_id = {candidate.insight_id: candidate for candidate in candidates}
         if len(set(selection.selected_ids)) != len(selection.selected_ids):
             raise ValueError("AI selection contains duplicate IDs.")
-        selected = [by_id[insight_id] for insight_id in selection.selected_ids]
+        mandatory = [
+            candidate
+            for candidate in candidates
+            if candidate.priority is InsightPriority.CRITICAL
+        ]
+        ranked = [
+            by_id[insight_id]
+            for insight_id in selection.selected_ids
+            if by_id[insight_id].priority is not InsightPriority.CRITICAL
+        ]
+        remaining_slots = max(0, 3 - len(mandatory))
+        selected = mandatory + ranked[:remaining_slots]
     except (KeyError, TypeError, ValueError, ValidationError, RuntimeError):
         return _response(packet, fallback_items, InsightSource.FALLBACK)
 
