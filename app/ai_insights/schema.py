@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from enum import Enum
 from typing import Literal
 from uuid import UUID
 
@@ -52,3 +53,38 @@ class InsightFactPacket(BaseModel):
     sleep: SleepFacts
     alerts: AlertFacts
     missing_data: list[Literal["heart_rate", "spo2", "activity", "sleep"]]
+
+
+class InsightPriority(str, Enum):
+    CRITICAL = "critical"
+    WARNING = "warning"
+    INFORMATIONAL = "informational"
+    POSITIVE = "positive"
+
+
+class InsightSource(str, Enum):
+    AI_RANKED = "ai_ranked"
+    FALLBACK = "fallback"
+
+
+class InsightCandidate(BaseModel):
+    insight_id: str = Field(pattern=r"^[A-Z][A-Z0-9_]*$")
+    priority: InsightPriority
+    title: str = Field(min_length=1, max_length=80)
+    message: str = Field(min_length=1, max_length=280)
+    evidence_keys: list[str] = Field(min_length=1)
+
+
+class InsightSelection(BaseModel):
+    selected_ids: list[str] = Field(min_length=1, max_length=3)
+
+
+class CaregiverInsightResponse(BaseModel):
+    patient_id: UUID
+    range: Literal["7d"] = "7d"
+    from_at: datetime
+    to_at: datetime
+    source: InsightSource
+    summary: str
+    items: list[InsightCandidate] = Field(max_length=3)
+    disclaimer: str
