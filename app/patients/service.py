@@ -498,6 +498,8 @@ def patient_read_payload(row: PatientReadRow, *, detail: bool) -> dict:
             monitoring_devices=row.monitoring_devices,
             emergency_contact_name=patient.emergency_contact_name,
             emergency_contact_phone=patient.emergency_contact_phone,
+            backup_caregiver_name=patient.backup_caregiver_name,
+            backup_caregiver_phone=patient.backup_caregiver_phone,
             known_conditions=patient.known_conditions,
             medications=patient.medications,
             baseline_heart_rate=patient.baseline_heart_rate,
@@ -532,6 +534,8 @@ def update_patient(
     patient.address_or_room = payload.address_or_room
     patient.emergency_contact_name = payload.emergency_contact_name
     patient.emergency_contact_phone = payload.emergency_contact_phone
+    patient.backup_caregiver_name = payload.backup_caregiver_name
+    patient.backup_caregiver_phone = payload.backup_caregiver_phone
     patient.known_conditions = payload.known_conditions
     patient.medications = payload.medications
     patient.health_notes = payload.monitoring_notes

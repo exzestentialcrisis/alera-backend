@@ -600,3 +600,29 @@ def test_only_active_alerts_are_queued(db_session, patient, event_payload, trans
     alert.status = AlertStatus.ACKNOWLEDGED
     db_session.commit()
     transport.assert_not_called()
+
+
+def test_critical_sms_uses_patient_backup_contact_without_account(
+    db_session,
+    patient,
+    event_payload,
+    monkeypatch,
+):
+    patient.backup_caregiver_name = "SMS Only Backup"
+    patient.backup_caregiver_phone = "+639171234567"
+    db_session.commit()
+
+    settings = Settings(
+        _env_file=None,
+        sms_enabled=True,
+        semaphore_api_key="test-secret",
+    )
+    monkeypatch.setattr(service, "get_settings", lambda: settings)
+    send_sms = Mock()
+    monkeypatch.setattr(service.SemaphoreSMSSender, "send", send_sms)
+
+    critical(db_session, event_payload)
+
+    send_sms.assert_called_once()
+    assert send_sms.call_args.args[0] == "+639171234567"
+    assert "Test Patient" in send_sms.call_args.args[1]

@@ -9,8 +9,8 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
-    SmallInteger,
     Numeric,
+    SmallInteger,
     String,
     Text,
     event,
@@ -99,6 +99,12 @@ class ElderlyPatient(Base):
         String(150), nullable=True
     )
     emergency_contact_phone: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    backup_caregiver_name: Mapped[str | None] = mapped_column(
+        String(150), nullable=True
+    )
+    backup_caregiver_phone: Mapped[str | None] = mapped_column(
         String(30), nullable=True
     )
     baseline_heart_rate: Mapped[Decimal | None] = mapped_column(

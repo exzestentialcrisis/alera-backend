@@ -6,13 +6,13 @@ from sqlalchemy.orm import Session
 from app.alerts.model import Alert, AlertStatus
 from app.core.config import get_settings
 from app.devices.model import CaregiverPushDevice
-from app.event_evaluations.model import EventEvaluation, EvaluationSeverity
+from app.event_evaluations.model import EvaluationSeverity, EventEvaluation
 from app.health_events.model import HealthEvent
-from app.patients.model import ElderlyPatient
-from app.notifications.content import notification_content
 from app.household_access.model import CaregiverPatientAssignment
+from app.notifications.content import notification_content
 from app.notifications.fcm import FCMSender
 from app.notifications.sms import SemaphoreSMSSender
+from app.patients.model import ElderlyPatient
 from app.patients.photo_storage import public_profile_photo_url
 from app.users.model import AccountStatus, User, UserRole
 
@@ -125,34 +125,21 @@ def deliver_alert_notifications(bind, notification_intents):
                         logger.warning("FCM device delivery failed.")
 
                 if (
-                    sms_sender.configured
-                    and evaluation is not None
-                    and evaluation.severity is EvaluationSeverity.CRITICAL
-                ):
-                    backup = db.scalar(
-                        select(User)
-                        .join(
-                            CaregiverPatientAssignment,
-                            CaregiverPatientAssignment.caregiver_user_id
-                            == User.user_id,
-                        )
-                        .where(
-                            CaregiverPatientAssignment.patient_id == alert.patient_id,
-                            CaregiverPatientAssignment.assignment_role == "BACKUP",
-                            CaregiverPatientAssignment.unassigned_at.is_(None),
-                            User.account_status == AccountStatus.ACTIVE,
-                            User.role == UserRole.CAREGIVER,
-                            User.phone_number.is_not(None),
-                        )
+                    (
+                        sms_sender.configured
+                        and evaluation is not None
+                        and evaluation.severity is EvaluationSeverity.CRITICAL
                     )
-                    if backup is not None and backup.phone_number:
-                        try:
-                            sms_sender.send(
-                                backup.phone_number,
-                                f"ALERA CRITICAL: {title}. {body}",
-                            )
-                        except Exception:
-                            logger.warning("Backup caregiver SMS delivery failed.")
+                    and patient is not None
+                    and patient.backup_caregiver_phone
+                ):
+                    try:
+                        sms_sender.send(
+                            patient.backup_caregiver_phone,
+                            f"ALERA CRITICAL: {title}. {body}",
+                        )
+                    except Exception:
+                        logger.warning("Backup caregiver SMS delivery failed.")
             db.commit()
     except Exception:
         logger.warning("Alert notification delivery unavailable.")

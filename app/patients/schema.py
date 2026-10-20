@@ -38,6 +38,8 @@ class PatientCreate(BaseModel):
     address_or_room: str | None = None
     emergency_contact_name: str | None = Field(default=None, max_length=150)
     emergency_contact_phone: str | None = Field(default=None, max_length=30)
+    backup_caregiver_name: str | None = Field(default=None, max_length=150)
+    backup_caregiver_phone: str | None = Field(default=None, max_length=30)
     known_conditions: str | None = None
     medications: str | None = None
     baseline_heart_rate: Decimal | None = Field(
@@ -70,6 +72,8 @@ class PatientUpdate(BaseModel):
     address_or_room: str | None
     emergency_contact_name: str | None = Field(max_length=150)
     emergency_contact_phone: str | None = Field(max_length=30)
+    backup_caregiver_name: str | None = Field(default=None, max_length=150)
+    backup_caregiver_phone: str | None = Field(default=None, max_length=30)
     known_conditions: str | None
     medications: str | None
     monitoring_notes: str | None
