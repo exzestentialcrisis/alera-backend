@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.ai_insights.facts import build_insight_fact_packet
 from app.ai_insights.provider import (
+    GeminiInsightRankingProvider,
     InsightRankingProvider,
-    OpenAIInsightRankingProvider,
 )
 from app.ai_insights.schema import CaregiverInsightResponse
 from app.ai_insights.service import generate_caregiver_insights
@@ -24,12 +24,12 @@ router = APIRouter(prefix="/api/v1/patients", tags=["Caregiver insights"])
 def get_insight_ranking_provider(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> InsightRankingProvider | None:
-    if not settings.ai_insights_enabled or settings.openai_api_key is None:
+    if not settings.ai_insights_enabled or settings.gemini_api_key is None:
         return None
 
-    return OpenAIInsightRankingProvider(
-        api_key=settings.openai_api_key.get_secret_value(),
-        model=settings.openai_model,
+    return GeminiInsightRankingProvider(
+        api_key=settings.gemini_api_key.get_secret_value(),
+        model=settings.gemini_model,
     )
 
 

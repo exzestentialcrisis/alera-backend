@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     inactivity_day_end_hour: int = 22
     activity_step_stale_seconds: int = 900
 
-    openai_api_key: SecretStr | None = None
-    openai_model: str = "gpt-5.4-mini"
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = "gemini-3.8-flash"
     ai_insights_enabled: bool = False
 
     alera_jwt_secret: str | None = None
