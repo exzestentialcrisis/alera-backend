@@ -56,6 +56,8 @@ def update_device_status(
             device_name=device.device_name,
             device_model=device.device_model,
             battery_percent=device.battery_percent,
+            is_worn=device.is_worn,
+            not_worn_since=device.not_worn_since,
             connection_status=device.connection_status,
             reported_at=device.reported_at,
             last_seen_at=device.last_seen_at,
@@ -63,7 +65,7 @@ def update_device_status(
             created_at=device.created_at,
             updated_at=device.updated_at,
             applied=result.applied,
-        )
+            )
 
     except DeviceStatusAccessError as exc:
         raise HTTPException(
